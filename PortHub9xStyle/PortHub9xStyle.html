@@ -1,0 +1,671 @@
+<!doctype html>
+<!--
+  ============================================================================
+  SERVER HUB — Win9x-style dashboard for a personal home server
+  ============================================================================
+
+  БЫСТРЫЙ СТАРТ
+  -------------
+  Это один самодостаточный HTML-файл. Просто открой его в браузере.
+  Для публикации: скопируй файл в корень репозитория как `index.html`.
+
+  ---------------------------------------------------------------------------
+  ЧТО МЕНЯТЬ ПОД СВОЙ СЕРВЕР
+  ---------------------------------------------------------------------------
+  Всё настраивается в одном месте — объект CONFIG в самом низу файла,
+  в начале скрипта (ищите `const CONFIG = {`).
+
+    1. serverName       — имя твоего сервера. Показывается в заголовке вкладки,
+                          в заголовке окна, в таскбаре и в окне Help.
+                          Пример: 'My Home Server'
+
+    2. serverIcon       — одна буква для иконки в заголовке окна.
+                          Пример: 'S'
+
+    3. welcomeTitle     — заголовок приветствия.
+    4. welcomeText      — текст приветствия (краткое описание сервера).
+
+    5. lanHost          — адрес в локальной сети, который будет подставлен
+                          в ссылки сервисов. Пример: '192.168.1.10'
+    6. tailscaleHost    — имя узла в Tailscale или его MagicDNS-адрес.
+                          Пример: 'myserver' или '100.64.0.1'
+
+    7. favoriteUrl      — ссылка, которая открывается по кнопке «Favorites».
+                          Пример: 'https://example.com'
+
+    8. services         — массив сервисов. Каждый элемент:
+                            {
+                              name:  'Название сервиса',   // обязательно
+                              port:  '8080',               // обязательно
+                              note:  'описание',           // необязательно
+                              icon:  '🌐'                  // необязательно
+                            }
+                          icon — любой символ/эмодзи, который покажется
+                          на иконке карточки (📁 🌐 🎬 🗳 …).
+                          Если icon не задан или пустой, ставится номер по счёту.
+                          Добавляй/удаляй элементы массива — карточки в списке
+                          и счётчик в статус-баре обновятся автоматически.
+
+    9. help             — содержимое окна Help. Поддерживает HTML-теги:
+                            help: {
+                              windowTitle:'Help',        // заголовок окна
+                              title:     'Help',        // крупный заголовок
+                              intro:     'Текст-вступление.',
+                              items:     [ 'Пункт списка 1', 'Пункт списка 2' ],
+                              html:      '<p>Любой свой HTML</p>'  // необязательно
+                            }
+                          items — массив строк; каждая станет <li> списка.
+                          intro, items и html поддерживают теги: <b>, <i>, <code>,
+                          <a>, <br>, <img> и т.д. Если поле не указано — оно пропускается.
+
+    10. artWindowTitle  — название окна с ASCII-артом (пишется в таскбаре).
+                          Пример: 'Picture Viewer'
+    11. artFileName    — «имя файла» в заголовке этого окна. Изначально ASCII_ART.TXT,
+                          но можно написать что угодно: 'cat.txt', 'logo.anime',
+                          'Мой арт' и т.д.
+                          Пример: 'my_art.txt'
+    12. artIcon        — буква/эмодзи для иконки этого окна. Пример: 'P'
+
+    13. numberStyle    — как выглядит ЦИФРА в иконке сервиса, которому не задан
+                          icon (номер по счёту):
+                            'title' — как название сервиса (14px, жирный, синий)
+                            'big'   — крупная цифра 19px
+                          По умолчанию 'title'.
+
+  ---------------------------------------------------------------------------
+  ЧТО МЕНЯТЬ НЕ НУЖНО
+  ---------------------------------------------------------------------------
+  • ASCII-арт — лежит в pre в окне Picture Viewer (строки с символами ⠀).
+    Он сам подстраивается под размер окна.
+  • Окна можно двигать за заголовок и менять размер за угол окна (справа снизу).
+  • Текст справки берётся из CONFIG.help (см. пункт 9 выше).
+
+  ---------------------------------------------------------------------------
+  ПОДСКАЗКИ
+  ---------------------------------------------------------------------------
+  • Адреса можно менять прямо в интерфейсе — поля сверху. Ссылки пересобираются
+    сами, но значения из CONFIG используются как значения по умолчанию.
+  • Пункт меню «View -> Zoom» масштабирует ASCII-арт.
+  • Надпись «N services» в статус-баре считается автоматически.
+  ============================================================================
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server Hub</title>
+<style>
+:root{--desktop:#008080;--gray:#c0c0c0;--light:#fff;--mid:#dfdfdf;--dark:#808080;--black:#222;--blue:#000080;--navy:#000060}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;font-family:Tahoma,Verdana,sans-serif;font-size:13px;color:#111;background:var(--desktop);overflow:hidden}
+.scene{position:absolute;top:0;left:0;right:0;bottom:36px;overflow:hidden}
+.window{background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005}
+.appwindow{position:absolute;display:flex;flex-direction:column;min-width:260px;min-height:160px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005;overflow:visible}
+.appwindow>.titlebar{cursor:move;flex:0 0 auto;touch-action:none;-webkit-user-select:none;user-select:none}
+.appwindow>.titlebar .window-controls{touch-action:none}
+.winbody{flex:1 1 auto;min-height:0;overflow:auto;border:2px inset #fff;background:var(--gray);padding:14px}
+.art-body{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;overflow:hidden;padding:10px}
+.resize-grip{position:absolute;right:1px;bottom:1px;width:16px;height:16px;cursor:nwse-resize;touch-action:none;z-index:10;background-image:linear-gradient(135deg,transparent 0 40%,var(--dark) 40% 48%,transparent 48% 58%,var(--dark) 58% 66%,transparent 66% 76%,var(--dark) 76% 84%,transparent 84%);user-select:none}
+.taskbar{position:absolute;left:0;right:0;bottom:0;height:36px;display:flex;align-items:center;gap:6px;padding:4px 6px;background:var(--gray);border-top:2px solid var(--light);z-index:500}
+.task{display:flex;align-items:center;gap:7px;min-width:150px;max-width:210px;text-align:left;background:var(--gray);border:2px outset #fff;padding:5px 9px;font:12px Tahoma,Verdana,sans-serif;color:#111;cursor:default;overflow:hidden;white-space:nowrap}
+.task.active{border-style:inset;background:#dedede;font-weight:bold}
+.task .ticon{width:16px;height:16px;background:#c0c0c0;border:1px solid #808080;display:grid;place-items:center;font:bold 10px Tahoma;color:#000080;flex:0 0 auto}
+.taskbar .spacer{flex:1}
+.taskbar .clock{border:2px inset #fff;padding:5px 10px;font:11px Tahoma,sans-serif;color:#333;min-width:96px;text-align:center}
+.titlebar{height:30px;background:linear-gradient(90deg,#000080,#1084d0);color:#fff;display:flex;align-items:center;justify-content:space-between;padding:3px 5px 3px 9px;font-weight:bold;letter-spacing:.1px}
+.titleleft{display:flex;align-items:center;gap:8px}.appicon{width:18px;height:18px;background:#c0c0c0;border:2px outset #fff;display:grid;place-items:center;color:#000080;font-weight:bold;font-size:11px}
+.window-controls{display:flex;gap:3px}.winbtn{width:22px;height:20px;background:var(--gray);border:2px outset #fff;display:grid;place-items:center;font:bold 12px Tahoma;color:#111;line-height:1}
+.menubar{display:flex;gap:6px;padding:4px 6px;position:relative;z-index:60}
+.menuitem{position:relative;padding:5px 10px;border:2px solid transparent;cursor:default;user-select:none;white-space:nowrap;line-height:1.1}
+.menuitem:first-letter{text-decoration:underline}
+.menuitem:hover{border-color:var(--light) var(--black) var(--black) var(--light);background:#dfdfdf}
+.menuitem.open,.menuitem:active{border-color:var(--dark) var(--light) var(--light) var(--dark);background:#efefef}
+.menu{display:none;position:absolute;top:100%;left:0;min-width:190px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);box-shadow:2px 2px 0 #0004;padding:3px;z-index:100}
+.menuitem.open .menu{display:block}
+.menu button{display:flex;align-items:center;justify-content:space-between;gap:18px;width:100%;text-align:left;background:transparent;border:0;font:12px Tahoma,Verdana,sans-serif;color:#111;padding:5px 9px;cursor:default}
+.menu button:hover{background:var(--blue);color:#fff}
+.menu button .sc{color:#666;font-size:11px}
+.menu button:hover .sc{color:#cfe0ff}
+.menu .sep{height:1px;margin:4px;background:var(--dark);border-bottom:1px solid var(--light)}
+.content{border:2px inset #fff;padding:18px;background:var(--gray)}
+.welcome{border:2px inset #fff;background:#eee;padding:12px 13px;margin-bottom:14px}.welcome h1{font-size:21px;margin:0 0 7px;font-weight:bold;color:#000080}.welcome p{margin:0;line-height:1.45;color:#333}
+.hosts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:15px}.field label{display:block;font-size:11px;font-weight:bold;margin:0 0 5px}.field input{width:100%;min-width:0;padding:6px 7px;background:#fff;border:2px inset #fff;border-radius:0;font:12px Tahoma, sans-serif;color:#111;outline-color:#000080}
+.group-title{font-weight:bold;background:#000080;color:#fff;padding:6px 8px;margin-bottom:9px}
+.services{display:grid;gap:9px}.service{display:grid;grid-template-columns:37px minmax(0,1fr);gap:10px;align-items:start;background:#d4d0c8;border:2px outset #fff;padding:10px}.iconbox{width:35px;height:35px;border:2px inset #fff;background:#eee;display:grid;place-items:center;font-size:19px;line-height:1;color:#000080;font-weight:bold;font-family:"Segoe UI Emoji","Noto Color Emoji","Apple Color Emoji",Tahoma,sans-serif}
+.iconbox.is-number{font-family:Tahoma,Verdana,sans-serif;font-size:14px;line-height:1}
+body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14px;font-weight:bold;color:#000080;margin:0 0 4px}.service p{font-size:11px;color:#444;margin:0 0 9px}.actions{display:flex;gap:7px;flex-wrap:wrap}.actions a{display:inline-block;text-align:center;text-decoration:none;color:#111;background:var(--gray);border:2px outset #fff;padding:6px 9px;font-size:11px;min-width:76px}.actions a:active{border-style:inset;padding:7px 8px 5px 10px}.actions a:hover{background:#e8e8e8}
+.art-stage{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#2b2b2b;border:2px inset #7a7a7a;box-shadow:inset 0 0 0 1px #1c1c1c}
+.art-wrap{display:inline-flex;align-items:center;justify-content:center;overflow:hidden;padding:10px;max-width:100%}pre{font-family:"DejaVu Sans Mono","Noto Sans Mono",monospace;font-size:11px;line-height:1.05;color:#e8e8e8;white-space:pre;margin:0;max-width:none;font-weight:500;flex-shrink:0}
+.statusbar{display:flex;gap:4px;margin:6px 2px 2px;flex:0 0 auto}.statusbar div{border:2px inset #fff;padding:5px 8px;font-size:11px;color:#333}.statusbar div:first-child{flex:1}.footer{margin-top:9px;text-align:right;color:#333;font-size:10px}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;padding:20px;z-index:1000}
+.modal-overlay[hidden]{display:none}
+.help-window{width:min(560px,100%);max-height:80vh;display:flex;flex-direction:column;box-shadow:4px 4px 0 #0006}
+.help-window .titlebar{cursor:move}
+.help-body{flex:1 1 auto;overflow:auto;background:#fff;padding:16px;color:#111}
+.help-body h1{margin:0 0 10px;font-size:18px;color:#000080}
+.help-body p,.help-body li{line-height:1.5;margin:0 0 10px}
+.help-body code{background:#eee;border:1px solid #ccc;padding:1px 4px;font-family:"DejaVu Sans Mono",monospace}
+.winbtn[data-close]{cursor:default}
+@media(max-width:500px){.hosts{grid-template-columns:1fr}.art-wrap{padding:5px}.menubar{gap:2px}.menuitem{padding:5px 6px}.service{padding:8px}.task{min-width:120px}}
+</style>
+</head>
+<body>
+<div class="scene" id="scene">
+  <section class="appwindow" id="winServers">
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-server-icon>S</span><span data-server-name>My Home Server</span></div><div class="window-controls"><span class="winbtn" data-win-min="winServers">_</span><span class="winbtn" data-win-max="winServers">□</span><span class="winbtn" data-win-close="winServers">×</span></div></div>
+    <nav class="menubar">
+      <div class="menuitem" data-menu>File
+        <div class="menu">
+          <button data-action="reload">Refresh</button>
+          <button data-action="copy-links">Copy service links</button>
+          <div class="sep"></div>
+          <button data-action="exit">Exit</button>
+        </div>
+      </div>
+      <div class="menuitem" data-menu>View
+        <div class="menu">
+          <button data-action="zoom-in">Zoom in<span class="sc">+</span></button>
+          <button data-action="zoom-out">Zoom out<span class="sc">&minus;</span></button>
+          <button data-action="zoom-reset">Reset zoom</button>
+          <div class="sep"></div>
+          <button data-action="toggle-services">Show / hide services</button>
+          <button data-action="toggle-fullscreen">Fullscreen</button>
+        </div>
+      </div>
+      <div class="menuitem" data-action="favorite">Favorites</div>
+      <div class="menuitem" data-action="help">Help</div>
+    </nav>
+    <div class="winbody">
+          <section class="welcome"><h1>Welcome</h1><p>Personal home server dashboard. Replace this text with your own description.</p></section>
+          <div class="hosts">
+            <div class="field"><label for="lanHost">Local network address</label><input id="lanHost" value="192.168.1.10" placeholder="192.168.1.10"></div>
+            <div class="field"><label for="tailHost">Tailscale address</label><input id="tailHost" value="myhost" placeholder="100.x.y.z / myhost"></div>
+          </div>
+<div class="group-title">Available services</div>
+          <div class="services"></div>
+        </div>
+    <div class="statusbar"><div>Ready</div><div>6 services</div><div>Local / Tailscale</div></div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <section class="appwindow" id="winArt">
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-art-icon>P</span><span><span data-art-title>Picture Viewer</span> &mdash; <span data-art-file>ASCII_ART.TXT</span></span></div><div class="window-controls"><span class="winbtn" data-win-min="winArt">_</span><span class="winbtn" data-win-max="winArt">□</span><span class="winbtn" data-win-close="winArt">×</span></div></div>
+    <div class="winbody art-body">
+      <div class="art-stage"><div class="art-wrap"><pre>
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣤⠤⠤⠤⠤⣄⡀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⡤⠴⠒⠒⠒⡲⠞⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠉⠓⠦⢄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠔⠋⠁⠀⠀⠀⠀⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠲⢄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡠⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢆⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠜⠁⠀⠀⠀⠀⣠⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠒⠤⡀⠀⠀⠀⠀⠀⠀⠀⠀⠑⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠏⠀⠀⠀⠀⢠⠜⠁⠀⠀⠀⡔⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠢⡀⠀⠀⠀⠀⠀⠀⠀⠈⢦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡎⠀⡠⠀⠀⢠⠃⠀⠀⠀⠀⡘⠀⠀⠀⠀⢠⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢆⠀⠀⠀⠐⠄⠀⠀⠈⢆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⡼⠀⠞⠀⠀⢀⠇⠀⠀⠀⠀⢠⠃⠀⡄⠀⠀⢸⠀⢠⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢂⠀⠀⠀⠈⢆⠀⠀⠈⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⢨⠃⡜⠀⠀⠀⢸⠀⠀⠀⠀⠀⢸⠀⠸⠀⠀⠀⢸⠀⠈⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠆⠀⠀⠀⠀⢣⠀⠀⠘⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢠⠎⠀⡇⠀⠀⠀⢸⠀⠀⠀⠀⠀⢸⠀⠀⠀⠀⠀⠀⡄⠀⠡⠀⠀⠀⠀⠀⠀⢣⠀⠀⠀⠀⠸⡀⠀⠀⠀⠀⢣⠀⠀⠘⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⢀⣀⠤⠋⠀⠀⡇⠀⠀⠀⠘⡄⠀⠀⠀⠀⠘⡄⠰⠀⠀⠀⠀⠹⡀⠀⠡⡀⠀⠀⠀⠀⠀⠑⣄⣄⢀⣄⠇⠀⠀⠀⠀⠀⢣⠀⠀⠈⠢⡀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠈⠑⠆⠤⠤⡄⠸⠀⠀⠀⢠⠳⡀⠀⠀⠀⠀⢡⠀⢃⠀⠀⠀⠀⢗⡄⠀⠘⢄⠀⠀⠀⢸⠱⣸⡘⣾⢸⢰⠀⠣⡀⠀⠀⠀⠣⡀⠀⠀⠈⢑⡦⠄⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⢘⠃⢀⠣⡀⠀⢸⠀⠘⢄⠠⠐⠁⠘⡑⣈⢂⠀⠀⠀⠈⢏⠲⢄⠀⠁⠦⢠⠤⠥⠈⠁⠉⠈⡜⡂⠀⠈⠐⠢⠄⢀⣙⣭⣈⠙⠉⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢠⠎⠀⢸⠀⢱⠄⡸⡀⠀⠀⠑⠢⢀⡀⠐⢌⠑⠧⢢⣀⣀⠀⣑⣄⠉⠐⠠⠄⣉⣆⣀⠀⠀⢀⠝⠉⢉⣲⠤⠀⠀⠀⠈⢄⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⢀⣤⠴⠋⠀⠀⠈⡀⠀⡆⠈⣵⣤⣄⡀⠀⠄⡈⠉⠀⠉⠀⠀⠀⠀⠉⠤⠂⢈⣡⣤⡖⠓⠒⠦⠭⠉⣘⠀⢉⡏⠀⢄⠀⠀⠀⠀⠈⠢⡀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠈⠳⠢⡀⠀⠒⠀⣧⠀⠱⡀⠀⠉⠛⠻⢷⣦⡀⠀⠀⠀⠀⠀⠀⠀⣠⣶⡿⠛⠛⠉⠃⠀⠀⠀⣎⢷⠸⠁⡜⠐⠀⢀⠉⠂⠠⠄⠀⠀⠬⡵⠰⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⡻⠁⡆⠀⢣⠀⣠⣴⡾⠟⠛⠁⠀⠀⠀⠀⠀⠀⠀⠈⠙⠛⠻⢷⣶⠀⠀⠀⠀⠀⢀⠇⡜⢠⠃⢀⠀⠉⠒⠂⠠⣖⣚⠁⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⡠⡄⠚⠁⠀⢸⠀⢈⠨⣈⣁⡹⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠀⠀⡹⠀⠀⠀⠀⠀⢸⠮⠔⠁⠀⠀⠑⣦⠄⠀⠠⠖⠋⠁⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠈⠁⠀⠈⣟⣀⢾⢆⠀⠐⠑⠔⠁⠀⠀⢠⢴⠆⠒⠠⠀⠀⠐⠑⠑⢁⠇⠀⠀⠀⠀⠀⢐⣣⠀⠀⢠⣀⡀⠈⢦⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣈⠏⠀⠉⡒⠤⠄⣀⣀⠀⠐⠣⠤⠤⠔⠀⠀⣀⣀⠠⢼⠀⠀⠀⠀⢀⡠⠋⠈⡇⠀⢠⠄⠉⠉⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠒⠧⠤⣔⡞⠙⣤⣀⣀⣎⠜⢉⣩⣿⢽⣍⣛⠓⡄⡠⠐⡡⠣⢄⡀⣀⣀⣀⠄⠀⢹⠖⠬⠧⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠉⠀⠀⠁⠉⣶⡤⠴⣺⡿⠶⢞⣫⠓⠒⢥⠀⠀⠀⠀⠀⠀⠀⢀⠀⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡜⠁⠀⠰⠁⠀⠀⠀⠀⢇⠀⠀⠑⡄⠀⠀⠀⠀⠀⠀⠑⢼⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡇⠀⠀⢂⠀⠀⠀⠀⠀⡼⠉⠁⠁⠊⢳⢴⣂⡄⢀⡀⠀⠠⡗⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠴⠛⢖⠒⠚⡕⠲⠶⠖⠊⠹⡄⠔⠂⠀⠀⠑⢼⡺⡑⠪⡐⢤⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢴⡀⠈⢢⡀⠘⢦⠀⠀⠀⠰⠀⠀⠀⢀⠔⢱⠀⢣⡘⣤⠿⠞⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢈⠉⠁⠙⣄⠀⢳⠀⣀⠀⣗⠄⠊⠀⠀⡈⠀⢠⠠⡌⠙⠢⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠂⣤⠊⠈⢵⡎⣧⣦⠙⣿⠀⠀⠀⢀⠃⠀⢸⠀⠈⢂⠀⠈⢣⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⠺⠤⠬⠦⠬⠴⠛⠷⠦⠶⢦⠄⣀⠼⢤⣤⠜⠒⠖⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀</pre></div></div></div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+</div>
+<div class="taskbar" id="taskbar">
+  <button class="task" data-window="winServers"><span class="ticon" data-server-icon>S</span><span class="tlabel" data-server-name>My Home Server</span></button>
+  <button class="task" data-window="winArt"><span class="ticon" data-art-icon>P</span><span class="tlabel" data-art-title>Picture Viewer</span></button>
+  <span class="spacer"></span>
+  <div class="clock" id="clock">--:--</div>
+</div>
+<div class="modal-overlay" id="helpOverlay" hidden>
+  <section class="window help-window" id="helpWindow">
+    <div class="titlebar" data-drag-window>
+      <div class="titleleft"><span class="appicon">?</span><span><span data-help-title>Help</span> &mdash; <span data-server-name>My Home Server</span></span></div>
+      <div class="window-controls"><span class="winbtn" data-close="helpOverlay">&times;</span></div>
+    </div>
+    <!-- Содержимое справки берётся из CONFIG.help (см. низ файла).
+     Чтобы задать его прямо в разметке — просто напиши свой HTML
+     внутрь <div data-help-body> ... </div>, он будет перезаписан при загрузке. -->
+    <div class="content help-body" data-help-body>
+      <h1>Help</h1>
+      <p>Replace this help text with your own.</p>
+    </div>
+  </section>
+</div>
+<script>
+/* ==========================================================================
+   НАСТРОЙКИ — МЕНЯТЬ ТОЛЬКО ЗДЕСЬ
+   ========================================================================== */
+const CONFIG={
+ serverName:'Server',
+ serverIcon:'S',
+ welcomeTitle:'Welcome',
+ welcomeText:'Test',
+ lanHost:'192.168.1.0',
+ tailscaleHost:'Taiscale',
+ favoriteUrl:'test',
+ artWindowTitle:'Picture Viewer',
+ artFileName:'Test.TXT',
+ artIcon:'P',
+ numberStyle:'title',
+ services:[
+  {name:'Placeholder 01',port:'8001',note:'Demo endpoint',icon:'♫'},
+  {name:'Placeholder 02',port:'8002',note:'Demo endpoint',icon:'📁'},
+  {name:'Placeholder 03',port:'8003',note:'Demo endpoint'},
+  {name:'Placeholder 04',port:'8004',note:'Demo endpoint'},
+  {name:'Placeholder 05',port:'8005',note:'Demo endpoint'},
+  {name:'Placeholder 06',port:'8006',note:'Demo endpoint'}
+ ],
+ help:{
+  windowTitle:'Help',
+  title:'Help',
+  intro:'Replace this help text with your own.',
+  items:[
+   'Edit the <code>CONFIG</code> object at the bottom of this file to set your server name, addresses and ports.',
+   'Give a service any icon by adding <code>icon: \'📁\'</code> to its entry — numbers are used when no icon is set.',
+   'Addresses can also be changed right here in the UI &mdash; service links update automatically.',
+   '<b>View &rarr; Zoom</b> scales the ASCII art.',
+   'Windows can be dragged by the title bar and resized from the bottom-right corner.'
+  ]
+ }
+};
+/* ========================================================================== */
+
+const lanInput=document.querySelector('#lanHost');
+const tailInput=document.querySelector('#tailHost');
+
+function renderServices(){
+ const box=document.querySelector('.services');
+ box.innerHTML=CONFIG.services.map((svc,i)=>{
+  const isNumber=(svc.icon==null||svc.icon==='');
+  const icon=isNumber?(i+1):svc.icon;
+  const iconCls=isNumber?'iconbox is-number':'iconbox';
+  const port=`<span class="svc-port">${svc.port}</span>`;
+  const note=svc.note?`${svc.note} · ${port}`:port;
+  return `<article class="service"><div class="${iconCls}">${icon}</div><div><h2>${svc.name}</h2><p>${note}</p><div class="actions"><a data-host="lan" data-port="${svc.port}" href="#">LAN</a><a data-host="tail" data-port="${svc.port}" href="#">Tailscale</a></div></div></article>`;
+ }).join('');
+ const counter=document.querySelector('.statusbar div:nth-child(2)');
+ if(counter)counter.textContent=`${CONFIG.services.length} services`;
+}
+function renderHelp(){
+ const box=document.querySelector('[data-help-body]');
+ if(!box)return;
+ const h=CONFIG.help||{};
+ let html='';
+ if(h.title)html+='<h1>'+h.title+'</h1>';
+ if(h.intro)html+='<p>'+h.intro+'</p>';
+ if(Array.isArray(h.items)&&h.items.length)html+='<ul>'+h.items.map(i=>'<li>'+i+'</li>').join('')+'</ul>';
+ if(h.html)html+=h.html;
+ box.innerHTML=html;
+ const titleEl=document.querySelector('[data-help-title]');
+ if(titleEl)titleEl.textContent=h.windowTitle||'Help';
+}
+function applyConfig(){
+ document.title=CONFIG.serverName;
+ document.querySelectorAll('[data-server-name]').forEach(el=>{el.textContent=CONFIG.serverName});
+ document.querySelectorAll('[data-server-icon]').forEach(el=>{el.textContent=CONFIG.serverIcon});
+ document.querySelectorAll('[data-art-title]').forEach(el=>{el.textContent=CONFIG.artWindowTitle});
+ document.querySelectorAll('[data-art-file]').forEach(el=>{el.textContent=CONFIG.artFileName});
+ document.querySelectorAll('[data-art-icon]').forEach(el=>{el.textContent=CONFIG.artIcon});
+ document.body.classList.toggle('number-style-big',CONFIG.numberStyle==='big');
+ const wt=document.querySelector('.welcome h1');
+ if(wt)wt.textContent=CONFIG.welcomeTitle;
+ const wp=document.querySelector('.welcome p');
+ if(wp)wp.textContent=CONFIG.welcomeText;
+ const footer=document.querySelector('.footer');
+ if(footer)footer.textContent=CONFIG.serverName;
+ lanInput.value=CONFIG.lanHost;
+ tailInput.value=CONFIG.tailscaleHost;
+ lanInput.placeholder=CONFIG.lanHost;
+ tailInput.placeholder=CONFIG.tailscaleHost;
+ renderServices();
+ renderHelp();
+}
+function cleanHost(value){return value.trim().replace(/^https?:\/\//i,'').replace(/\/+$/,'')}
+function updateLinks(){
+ const lan=cleanHost(lanInput.value),tail=cleanHost(tailInput.value);
+ document.querySelectorAll('a[data-port]').forEach(link=>{
+  const host=link.dataset.host==='lan'?lan:tail;
+  link.href=host?`http://${host}:${link.dataset.port}`:'#';
+  link.target='_blank';link.rel='noopener noreferrer';
+ });
+}
+applyConfig();
+lanInput.addEventListener('input',updateLinks);tailInput.addEventListener('input',updateLinks);updateLinks();
+
+const artStage=document.querySelector('.art-stage');
+const artWrap=artStage.querySelector('.art-wrap');
+const artPre=artWrap.querySelector('pre');
+function isBlankLine(line){return line.replace(/[\s\u2800]/g,'').length===0}
+function normalizeArt(text){
+ const lines=text.split('\n');
+ let a=0,b=lines.length;
+ while(a<b&&isBlankLine(lines[a]))a++;
+ while(b>a&&isBlankLine(lines[b-1]))b--;
+ return lines.slice(a,b).join('\n');
+}
+let asciiZoom=1;
+let fitting=false;
+function fitAscii(){
+ if(fitting)return;
+ fitting=true;
+ try{
+  const normalized=normalizeArt(artPre.textContent);
+  if(normalized!==artPre.textContent)artPre.textContent=normalized;
+  const cs=getComputedStyle(artWrap);
+  const padX=parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight)+parseFloat(cs.borderLeftWidth)+parseFloat(cs.borderRightWidth);
+  const padY=parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom)+parseFloat(cs.borderTopWidth)+parseFloat(cs.borderBottomWidth);
+  const availW=artStage.clientWidth-padX;
+  const availH=artStage.clientHeight-padY;
+  const REF=100;
+  artPre.style.fontSize=REF+'px';
+  const artW=artPre.scrollWidth||1;
+  const artH=artPre.scrollHeight||1;
+  const scaleW=availW>0?availW/artW:Infinity;
+  const scaleH=availH>0?availH/artH:Infinity;
+  let scale=Math.min(scaleW,scaleH);
+  if(!isFinite(scale))scale=1;
+  scale*=asciiZoom;
+  artPre.style.fontSize=Math.max(1,REF*scale).toFixed(3)+'px';
+ }finally{fitting=false}
+}
+window.addEventListener('resize',fitAscii);
+if('ResizeObserver'in window)new ResizeObserver(fitAscii).observe(artStage);
+new MutationObserver(fitAscii).observe(artPre,{childList:true,characterData:true,subtree:true});
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fitAscii);
+fitAscii();
+
+const menuitems=[...document.querySelectorAll('.menuitem[data-menu]')];
+function closeMenus(except){menuitems.forEach(m=>{if(m!==except)m.classList.remove('open')})}
+menuitems.forEach(item=>{
+ item.addEventListener('click',event=>{
+  if(event.target.closest('.menu'))return;
+  event.stopPropagation();
+  const willOpen=!item.classList.contains('open');
+  closeMenus(item);
+  item.classList.toggle('open',willOpen);
+ });
+ item.addEventListener('mouseenter',()=>{
+  if(document.querySelector('.menuitem.open')){closeMenus(item);item.classList.add('open')}
+ });
+});
+document.addEventListener('click',()=>closeMenus());
+document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeMenus();closeHelp()}});
+document.querySelectorAll('.menu button').forEach(btn=>btn.addEventListener('click',event=>{
+ event.stopPropagation();runAction(btn.dataset.action);closeMenus();
+}));
+document.querySelectorAll('.menuitem[data-action]').forEach(item=>item.addEventListener('click',event=>{
+ event.stopPropagation();runAction(item.dataset.action);
+}));
+
+function setZoom(value){asciiZoom=Math.min(4,Math.max(.25,value));fitAscii()}
+function openRoot(which){
+ const host=cleanHost(which==='lan'?lanInput.value:tailInput.value);
+ if(host)window.open('http://'+host,'_blank','noopener');
+}
+function copyLinks(){
+ const links=[...document.querySelectorAll('a[data-port]')].map(a=>a.href).filter(h=>h&&h!=='#'&&!h.endsWith('#'));
+ const text=links.join('\n');
+ if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text);
+}
+function toggleFullscreen(){
+ if(!document.fullscreenElement)document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen();
+ else document.exitFullscreen&&document.exitFullscreen();
+}
+function runAction(action){
+ switch(action){
+  case 'reload':location.reload();break;
+  case 'copy-links':copyLinks();break;
+  case 'exit':window.close();break;
+  case 'zoom-in':setZoom(asciiZoom*1.15);break;
+  case 'zoom-out':setZoom(asciiZoom/1.15);break;
+  case 'zoom-reset':setZoom(1);break;
+  case 'toggle-services':{
+   const services=document.querySelector('.services');
+   const title=document.querySelector('.group-title');
+   services.hidden=!services.hidden;
+   if(title)title.hidden=services.hidden;
+   layoutWindows();
+   break;
+  }
+  case 'toggle-fullscreen':toggleFullscreen();break;
+  case 'open-lan':openRoot('lan');break;
+  case 'open-tail':openRoot('tail');break;
+  case 'favorite':window.open(CONFIG.favoriteUrl,'_blank','noopener');break;
+  case 'help':openHelp();break;
+ }
+}
+
+const helpOverlay=document.querySelector('#helpOverlay');
+const helpWindow=document.querySelector('#helpWindow');
+function centerHelp(){helpWindow.style.position='';helpWindow.style.left='';helpWindow.style.top='';helpWindow.style.margin='';helpWindow.style.transform=''}
+function openHelp(){centerHelp();helpOverlay.hidden=false}
+function closeHelp(){helpOverlay.hidden=true}
+document.querySelectorAll('[data-close]').forEach(el=>el.addEventListener('click',()=>{
+ const target=document.getElementById(el.dataset.close);
+ if(target)target.hidden=true;
+}));
+helpOverlay.addEventListener('click',event=>{if(event.target===helpOverlay)closeHelp()});
+
+(function enableHelpDrag(){
+ let dragging=false,offsetX=0,offsetY=0;
+ helpWindow.addEventListener('pointerdown',event=>{
+  const bar=event.target.closest('[data-drag-window]');
+  if(!bar||event.target.closest('.window-controls'))return;
+  const rect=helpWindow.getBoundingClientRect();
+  dragging=true;offsetX=event.clientX-rect.left;offsetY=event.clientY-rect.top;
+  helpWindow.style.position='fixed';helpWindow.style.margin='0';
+  helpWindow.style.left=rect.left+'px';helpWindow.style.top=rect.top+'px';helpWindow.style.transform='none';
+ });
+ window.addEventListener('pointermove',event=>{
+  if(!dragging)return;
+  helpWindow.style.left=Math.max(0,event.clientX-offsetX)+'px';
+  helpWindow.style.top=Math.max(0,event.clientY-offsetY)+'px';
+ });
+ window.addEventListener('pointerup',()=>{dragging=false});
+})();
+
+const scene=document.querySelector('#scene');
+const appWindows=[...document.querySelectorAll('.appwindow')];
+const taskButtons=[...document.querySelectorAll('.task')];
+let zCounter=10,dragState=null,resizeState=null;
+
+function taskFor(win){return taskButtons.find(b=>b.dataset.window===win.id)}
+function focusWindow(win){
+ appWindows.forEach(w=>{if(w!==win)w.classList.remove('active')});
+ taskButtons.forEach(b=>b.classList.remove('active'));
+ win.classList.add('active');
+ win.style.zIndex=++zCounter;
+ const btn=taskFor(win);if(btn)btn.classList.add('active');
+}
+function showWindow(win,show){
+ win.hidden=!show;
+ if(show){focusWindow(win);fitAscii();}
+ else{const btn=taskFor(win);if(btn)btn.classList.remove('active');}
+}
+function clampWindow(win){
+ const sw=scene.clientWidth,sh=scene.clientHeight;
+ let left=parseFloat(win.style.left),top=parseFloat(win.style.top);
+ let w=win.offsetWidth,h=win.offsetHeight;
+ w=Math.min(w,sw);h=Math.min(h,sh);
+ left=Math.min(Math.max(isNaN(left)?0:left,0),Math.max(0,sw-60));
+ top=Math.min(Math.max(isNaN(top)?0:top,0),Math.max(0,sh-24));
+ win.style.left=left+'px';win.style.top=top+'px';
+ win.style.width=w+'px';win.style.height=h+'px';
+}
+
+appWindows.forEach(win=>{
+    win.addEventListener('pointerdown',event=>{
+    if(event.target.closest('.resize-grip'))return;
+    if(!win.hidden)focusWindow(win);
+   },true);
+    const bar=win.querySelector('.titlebar');
+   bar.addEventListener('pointerdown',event=>{
+    if(event.button!==0||event.target.closest('.window-controls')||event.target.closest('.resize-grip'))return;
+    resizeState=null;
+    const rect=win.getBoundingClientRect(),sr=scene.getBoundingClientRect();
+    const left=rect.left-sr.left,top=rect.top-sr.top;
+    win.style.width=rect.width+'px';win.style.height=rect.height+'px';
+    win.style.right='auto';win.style.bottom='auto';
+    win.style.left=left+'px';win.style.top=top+'px';
+    dragState={win,offX:event.clientX-left,offY:event.clientY-top};
+    try{bar.setPointerCapture(event.pointerId)}catch(e){}
+    event.preventDefault();
+   });
+   const grip=win.querySelector('.resize-grip');
+   if(grip)grip.addEventListener('pointerdown',event=>{
+    if(event.button!==0)return;
+    dragState=null;
+    const rect=win.getBoundingClientRect(),sr=scene.getBoundingClientRect();
+    const left=rect.left-sr.left,top=rect.top-sr.top;
+    win.style.width=rect.width+'px';win.style.height=rect.height+'px';
+    win.style.right='auto';win.style.bottom='auto';
+    win.style.left=left+'px';win.style.top=top+'px';
+const cs=getComputedStyle(win);
+   resizeState={win,startX:event.clientX,startY:event.clientY,startW:rect.width,startH:rect.height,
+    minW:parseFloat(cs.minWidth)||260,minH:parseFloat(cs.minHeight)||160};
+   win.dataset.manual='1';
+   try{grip.setPointerCapture(event.pointerId)}catch(e){}
+    event.preventDefault();
+    event.stopPropagation();
+   });
+   });
+
+window.addEventListener('pointermove',event=>{
+ if(dragState){
+  const sw=scene.clientWidth,sh=scene.clientHeight,win=dragState.win;
+  let left=event.clientX-dragState.offX,top=event.clientY-dragState.offY;
+  left=Math.min(Math.max(left,-(win.offsetWidth-40)),sw-40);
+  top=Math.min(Math.max(top,0),sh-24);
+  win.style.left=left+'px';win.style.top=top+'px';
+ }
+if(resizeState){
+   const sw=scene.clientWidth,sh=scene.clientHeight,win=resizeState.win;
+   const left=parseFloat(win.style.left)||0,top=parseFloat(win.style.top)||0;
+   const w=Math.min(Math.max(resizeState.minW,resizeState.startW+(event.clientX-resizeState.startX)),sw-left);
+   const h=Math.min(Math.max(resizeState.minH,resizeState.startH+(event.clientY-resizeState.startY)),sh-top);
+   win.style.width=w+'px';win.style.height=h+'px';
+  }
+});
+function endGesture(){dragState=null;resizeState=null}
+window.addEventListener('pointerup',endGesture);
+window.addEventListener('pointercancel',endGesture);
+window.addEventListener('blur',endGesture);
+
+document.querySelectorAll('[data-win-close]').forEach(el=>el.addEventListener('click',event=>{
+ event.stopPropagation();
+ const win=document.getElementById(el.dataset.winClose);if(win)showWindow(win,false);
+}));
+document.querySelectorAll('[data-win-min]').forEach(el=>el.addEventListener('click',event=>{
+ event.stopPropagation();
+ const win=document.getElementById(el.dataset.winMin);if(win)showWindow(win,false);
+}));
+document.querySelectorAll('[data-win-max]').forEach(el=>el.addEventListener('click',event=>{
+ event.stopPropagation();
+ const win=document.getElementById(el.dataset.winMax);if(!win)return;
+ if(win.dataset.maximized==='1'){
+  win.style.left=win.dataset.prevLeft;win.style.top=win.dataset.prevTop;
+  win.style.width=win.dataset.prevW;win.style.height=win.dataset.prevH;
+  win.dataset.maximized='0';
+ }else{
+win.dataset.prevLeft=win.style.left;win.dataset.prevTop=win.style.top;
+   win.dataset.prevW=win.style.width;win.dataset.prevH=win.style.height;
+   win.style.right='auto';win.style.bottom='auto';
+   win.style.left='2px';win.style.top='2px';
+   win.style.width=(scene.clientWidth-4)+'px';
+   win.style.height=(scene.clientHeight-4)+'px';
+   win.dataset.maximized='1';
+ }
+ fitAscii();
+}));
+
+taskButtons.forEach(btn=>btn.addEventListener('click',()=>{
+ const win=document.getElementById(btn.dataset.window);if(!win)return;
+ if(win.hidden)showWindow(win,true);
+ else if(btn.classList.contains('active'))showWindow(win,false);
+ else focusWindow(win);
+}));
+
+window.addEventListener('resize',()=>{layoutWindows(true);fitAscii()});
+function tick(){const el=document.querySelector('#clock');if(el)el.textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
+tick();setInterval(tick,10000);
+
+function measureArtRef(){
+  const REF=100,prev=artPre.style.fontSize;
+  artPre.style.fontSize=REF+'px';
+  const w=artPre.scrollWidth||1,h=artPre.scrollHeight||1;
+  artPre.style.fontSize=prev;
+  return {w:w,h:h};
+}
+function artAspect(){
+  const m=measureArtRef();
+  return m.w/m.h;
+}
+function autoSizeArt(force){
+  const sw=scene.clientWidth,sh=scene.clientHeight,m=10;
+  const servers=document.getElementById('winServers'),art=document.getElementById('winArt');
+  if(art.dataset.manual==='1'&&!force)return;
+  const sW=servers.hidden?0:servers.offsetWidth;
+  const stack=sw<760||(sw-2*m-sW-m)<320;
+  let availW,availH,left,top;
+  if(stack){
+   availW=sw-2*m;
+   top=servers.hidden?m:servers.offsetHeight+m;
+   availH=sh-top-m;
+   left=m;
+  }else{
+   availW=Math.max(260,sw-2*m-sW-m);
+   availH=Math.max(190,sh-2*m);
+   left=m;top=m;
+  }
+  availW=Math.max(260,availW);availH=Math.max(150,availH);
+  const aspect=artAspect();
+  let h=Math.min(availH,460);
+  let w=Math.min(availW,h*aspect);
+  if(w<320){w=Math.min(availW,320);h=Math.min(availH,w/aspect);}
+  w=Math.max(260,Math.round(w));h=Math.max(160,Math.round(h));
+  art.style.width=w+'px';art.style.height=h+'px';
+  art.style.left=(stack?left:sw-w-m)+'px';
+  art.style.top=(stack?top:sh-h-m)+'px';
+  art.style.right='auto';art.style.bottom='auto';
+  art.dataset.maximized='0';
+}
+function layoutWindows(force){
+  const sw=scene.clientWidth,sh=scene.clientHeight,m=10;
+  const servers=document.getElementById('winServers');
+  servers.style.left=m+'px';
+  servers.style.top=m+'px';
+  servers.style.right='auto';
+  servers.style.bottom='auto';
+  servers.style.width='auto';
+  servers.style.height='auto';
+  servers.style.maxWidth=(sw-2*m)+'px';
+  servers.style.maxHeight=(sh-2*m)+'px';
+  servers.dataset.maximized='0';
+  autoSizeArt(force);
+}
+
+(function initLayout(){
+  layoutWindows(true);
+  focusWindow(document.getElementById('winServers'));
+  fitAscii();
+})();
+</script>
+</body>
+</html>
