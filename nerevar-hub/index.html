@@ -1,0 +1,3044 @@
+<!--
+  ==========================================================================
+  SERVER HUB — Win9x-панель для домашнего сервера
+  ==========================================================================
+
+  СОСТАВ ПАПКИ
+  ------------
+    index.html            — эта панель (разметка, стили, логика)
+    config.js             — ВСЕ настройки: имя сервера, адреса, сервисы,
+                            System Monitor, аудио-плеер, скины, Help
+    server.py             — локальный сервер: раздаёт панель, метрики,
+                            картинки, музыку и скины
+    nerevar-hub.service   — unit для systemd (автозапуск)
+
+  БЫСТРЫЙ СТАРТ НА СЕРВЕРЕ
+  ------------------------
+    1. Скопируй папку в /opt/nerevar-hub (или в любое другое место)
+    2. python3 server.py --port 80        # проверка вручную
+    3. Для автозапуска см. файл nerevar-hub.service
+    4. Открой http://<ip-сервера>/
+
+  ЗАЧЕМ НУЖЕН server.py, А НЕ ОДИН ТОЛЬКО HTML
+  --------------------------------------------
+    Браузер не умеет читать процессор/память/диск — данные отдаёт
+    server.py, а панель забирает их по адресу из CONFIG.monitor
+    (по умолчанию '/api/stats' — тот же порт, CORS не нужен).
+    Можно открыть index.html и прямо с диска — тогда запусти сервер
+    с флагом --cors либо укажи в CONFIG.monitor полный адрес.
+
+  ЧТО МЕНЯТЬ ПОД СВОЙ СЕРВЕР
+  --------------------------
+    Всё — в отдельном файле config.js рядом с index.html (ищи
+    `window.CONFIG={`): имя сервера, адреса, сервисы, System Monitor
+    (там же — какие точки монтирования скрывать в разделе Storage),
+    аудио-плеер (откуда брать треки, громкость, скины Qmmp/Winamp 2)
+    и текст Help. Полный список полей — в шапке config.js.
+    index.html править не нужно: сохранил config.js — обновил
+    страницу (F5), сервер отдаёт его без кэша.
+
+  ТЕМА ОФОРМЛЕНИЯ — ТЁМНАЯ И СВЕТЛАЯ
+  ----------------------------------
+    CONFIG.theme в config.js: 'dark' (по умолчанию) или 'light'.
+    'dark' — тёмная тема в духе Dark Reader: бирюзовый рабочий стол,
+    почти чёрные тела окон, тёмно-синие заголовки, светло-голубые
+    подписи, белый текст, синие и оранжевые шкалы.
+    Та же тема переключается кнопкой «Dark theme» во вкладке View:
+    выбор запоминается в браузере и едет в раскладку на сервере
+    (layout.json), поэтому он одинаков на всех устройствах.
+    «View → Reset window layout» забывает выбор и возвращает тему,
+    заданную в config.js.
+
+  CONFIG.monitor — МЕТРИКИ СЕРВЕРА
+  -------------------------------
+      enabled     : true          — false прячет окно System Monitor
+      windowTitle : 'System Monitor'
+      icon        : 'M'
+      endpoint    : '/api/stats'  — откуда брать метрики
+                    (можно 'http://192.168.x.x/api/stats')
+      interval    : 2000          — период опроса, мс
+      timeout     : 2500          — таймаут запроса, мс
+      width/height: 360 / 225     — желаемый размер окна, оно само
+                                    подыщет себе свободное место
+      exclude      : ['/boot']    — какие точки монтирования не показывать
+                                    в разделе Storage; '/boot' прячет и
+                                    '/boot/efi'. Корень '/' — всегда.
+
+    Если сервер недоступен — окно показывает «N/A — host unreachable»,
+    в консоли при этом нет ошибок JS.
+
+  ЧТО ПОКАЗЫВАЕТ ОКНО SYSTEM MONITOR
+  ----------------------------------
+      CPU / RAM / Load — обычные полоски из /api/stats.
+
+      STORAGE          — по строке на каждый смонтированный диск:
+                         точка монтирования, устройство, занятость,
+                         подпись «92.8 GB free of 457 GB · ext4».
+                         >= 75% — оранжевая полоска,
+                         >= 90% — красная полоска и красный процент.
+
+      RAID             — по строке на каждый массив из /proc/mdstat:
+                         уровень (raid1 …), размер, состояние
+                         (clean [UU] / recovery 42% / DEGRADED /
+                         inactive) и физические диски внутри:
+                           ● рабочий, ○ запасной, × вышел из строя.
+                         Полоска — идущее восстановление, либо доля
+                         рабочих дисков массива.
+
+    Оба раздела показываются только когда данные есть: mdraid не
+    используется — блок RAID просто не отображается. Если томов много
+    и окно не влезает по высоте, внутри появляется полоса прокрутки.
+
+  АУДИО-ПЛЕЕР И СКИНЫ (CONFIG.music)
+  ---------------------------------
+      base     : 'music/'    — URL-префикс папки с треками. Папку music/
+                               отдаёт server.py; свой диск подключается
+                               флагом --music-dir /mnt/hdd/music,
+                               внешний адрес — просто полный URL.
+      list     : 'api/music' — endpoint со списком треков ('' — не
+                               спрашивать сервер, см. поле tracks)
+      tracks   : []          — ручной список: ['a.mp3','b.ogg']
+      volume   : 0.8         — громкость 0..1
+      loop     : 'all'       — 'off' | 'all' | 'one' (кнопка R)
+      shuffle  : false       — перемешивание (кнопка S)
+      startOpen: false       — открывать окно сразу при загрузке
+
+      Скины — настоящий вид Winamp 2 / Qmmp. Формат .wsz (это ZIP с
+      BMP-файлами: main.bmp, cbuttons.bmp, titlebar.bmp, numbers.bmp,
+      pledit.bmp, pledit.txt …):
+
+        * положи .wsz в папку skins/ — он появится в списке скинов;
+        * либо нажми «Skin…» и выбери .wsz у себя на диске (файл
+          никуда не отправляется — ZIP и BMP разбирает сам браузер);
+        * можно просто перетащить .wsz на окно плеера.
+
+      Настройки скинов (CONFIG.music.skins):
+        enabled        : true      — false прячет панель выбора скина
+        dir            : 'skins/'  — префикс папки со скинами (/skins/)
+        list           : 'api/skins' — endpoint со списком скинов
+        start          : ''        — скин при загрузке страницы
+        scale          : 2         — во сколько раз увеличено окно Winamp
+        playlistHeight : 196       — высота плейлиста в пикселях скина
+
+      Включённый скин кликабелен: кнопки транспорта, ползунки громкости
+      и перемотки, кнопки EQ/плейлиста, строки плейлиста (клик — играть,
+      колесо — прокрутка), заголовок — перетаскивание окна. Цвета
+      плейлиста берутся из pledit.txt скина. Нужен браузер с
+      поддержкой DecompressionStream (все современные).
+
+  СЕРВЕР (server.py)
+  ------------------
+    python3 server.py --port 80           # порт по умолчанию 80
+    python3 server.py --port 80 --cors    # если HTML открывается с диска
+
+    GET /             -> index.html
+    GET /api/stats    -> {"cpu":..,"load1":..,"cores":..,"mem_used":..,
+                          "mem_total_gb":..,"disk_used":..,"uptime":..}
+    GET /api/pics     -> {"images":[...],"art":[...]} — файлы из pics/
+    GET /pics/<имя>   -> картинка или ascii-арт из pics/
+    GET /api/music    -> {"tracks":[...]} — список треков из music/
+    GET /music/<имя>  -> аудиофайл (mp3/ogg/flac/…, Range поддерживается)
+    GET /api/skins    -> {"skins":[...]} — скины .wsz/.zip из skins/
+    GET /skins/<имя>  -> файл скина (zip-архив)
+    GET /favicon.ico  -> 204
+
+    Зависимостей нет — только стандартная библиотека Python 3.
+    Метрики берутся из /proc и os.statvfs.
+
+  ОКНА
+  ----
+    Перетаскивание — за заголовок, изменение размера — за уголок справа
+    снизу. Серверное окно всегда сверху слева, окно арта — снизу справа,
+    System Monitor само подстраивается под свободную зону.
+    Положения запоминаются на время сессии.
+
+  ЧАСЫ
+    На часах в таскбаре две строки: сверху ВРЕМЯ, под ним ДАТА
+    «Mo/Nov/2/2026» — «День недели в 2 символа / Мес / Д / Г», всегда
+    по-английски. Обе строки видны на любой ширине: рамка часов
+    подчиняется дате, поэтому на узких экранах ничего прятать не нужно
+    (раньше время до 700px скрывалось — теперь не скрывается).
+    Подписи сервисов до 420px ужимаются в иконки — таскбар влезает
+    вплоть до 380px.
+
+  КАЛЕНДАРЬ
+    Клик по часам в таскбаре открывает календарь: переключение месяцев
+    стрелками, сегодняшний день обведён пунктиром, выбранный — залит
+    синим, кнопка «Today» возвращает к текущему месяцу. Клик по дате
+    другого месяца переключает на этот месяц.
+    Закрывается повторным кликом по часам, кликом в любую другую точку
+    экрана или Esc. Текст календаря — английский, как весь интерфейс.
+
+  ASCII-АРТ
+  ---------
+    Внутри #winArt арта больше нет: имя файла лежит в config.js
+    (CONFIG.artFile), а сам арт читается с сервера из папки pics/
+    (по умолчанию pics/ASCII_ART.TXT).
+    Свой арт: положи .txt в pics/ и пропиши его имя в CONFIG.artFile —
+    index.html трогать не нужно. Файла нет или путь битый — в заголовке
+    окна «Cannot open: …», остальная панель работает как обычно.
+    Подгонка под размер окна и масштабирование без искажений
+    (View → Zoom) работают как раньше.
+
+  КАРТИНКИ И GIF
+  --------------
+    Окно Picture Viewer умеет показывать и обычные картинки, и анимированные
+    GIF (анимацию проигрывает браузер, ничего настраивать не нужно).
+    Открыть: File → Open image… — вписать адрес (URL) или нажать Browse… и
+    выбрать файл. Ещё проще — просто перетащить файл на окно: пока файл
+    висит над окном, вокруг него пунктирная рамка.
+    Поддерживаются PNG, JPG, WEBP, SVG, GIF и всё, что понимает браузер.
+    Картинка вписывается в окно целиком (contain), пропорции не искажаются,
+    окно само подстраивается под пропорции картинки, View → Zoom действует
+    и на неё. В заголовке окна — имя файла.
+    Неудачный адрес не ломает текущую картинку: в заголовке появится
+    «Cannot open: …», а диалог останется открытым — можно исправить адрес.
+    Бросили не-картинку — в заголовке «Not an image: …», содержимое не меняется.
+    File → Back to ASCII art возвращает исходный ASCII-арт.
+    Картинка берётся откуда угодно: файл с вашего диска (Browse… или
+    перетаскивание на окно), картинка с самого сервера из папки pics/
+    (адрес вида /pics/cat.gif) либо любой другой URL.
+    Из pics/ отдаются только файлы из списка (картинки и .txt-арт) и
+    только внутри самой папки: выход за её пределы (../, абсолютный
+    путь, симлинк) даёт 404.
+
+    Что показывать при загрузке — задаётся в CONFIG.picFile:
+      'cat.png'  — конкретная картинка из pics/
+      '~.png'    — каждый раз СЛУЧАЙНАЯ .png из pics/
+      '~.gif'    — случайная анимированная
+      '~'        — любая картинка из pics/
+      ''         — ничего: окно остаётся на ascii-арте
+    Для случайного выбора панель спрашивает список файлов по адресу
+    /api/pics (его отдаёт server.py) и берёт оттуда имя подходящего
+    расширения. Список обновляется при каждой загрузке страницы —
+    добавил картинку в pics/, перезагрузил вкладку, и она уже может
+    выпасть.
+
+    Папка pics/ — единственное место, где лежит содержимое Picture
+    Viewer: и картинки, и ascii-арт. В config.js — только имена.
+
+  ==========================================================================
+-->
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server Hub</title>
+<style>
+/* Цвета панели — все через переменные: светлая тема ниже (значения как были),
+   тёмная — блок html[data-theme=dark] в конце этого же style. */
+:root{--desktop:#008080;--gray:#c0c0c0;--light:#fff;--mid:#dfdfdf;--dark:#808080;--black:#222;--blue:#000080;--navy:#000060;
+ --edge:#fff;--blue-2:#1084d0;
+ --text:#111;--text-2:#333;--text-3:#222;--text-strong:#000;
+ --dim:#444;--dim-2:#555;--dim-3:#666;--dim-4:#777;--dim-5:#888;--muted:#a0a0a0;--dot:#000;
+ --heading:#000080;--error:#a00;--crit:#a00000;--ok:#006400;--spare:#806000;--fail-fg:#800000;--fail-bg:#e8c0c0;
+ --line:#ccc;--line-2:#999;
+ --surface:#fff;--surface-2:#eee;--card:#d4d0c8;
+ --active:#dedede;--active-2:#efefef;--hover:#e8e8e8;--hover-2:#dcdcdc;
+ --warn:#b06000}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;font-family:Tahoma,Verdana,sans-serif;font-size:13px;color:var(--text);background:var(--desktop);overflow:hidden}
+.scene{position:absolute;top:0;left:0;right:0;bottom:36px;overflow:hidden}
+.window{background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005}
+.appwindow{position:absolute;display:flex;flex-direction:column;min-width:260px;min-height:160px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005;overflow:visible}
+.appwindow>.titlebar{cursor:move;flex:0 0 auto;touch-action:none;-webkit-user-select:none;user-select:none}
+.appwindow>.titlebar .window-controls{touch-action:none}
+.winbody{flex:1 1 auto;min-height:0;overflow:auto;border:2px inset var(--edge);background:var(--gray);padding:14px}
+.art-body{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;overflow:hidden;padding:10px}
+.resize-grip{position:absolute;right:1px;bottom:1px;width:16px;height:16px;cursor:nwse-resize;touch-action:none;z-index:10;background-image:linear-gradient(135deg,transparent 0 40%,var(--dark) 40% 48%,transparent 48% 58%,var(--dark) 58% 66%,transparent 66% 76%,var(--dark) 76% 84%,transparent 84%);user-select:none}
+.taskbar{position:absolute;left:0;right:0;bottom:0;height:36px;display:flex;align-items:center;gap:6px;padding:4px 6px;background:var(--gray);border-top:2px solid var(--light);z-index:500}
+.task{display:flex;align-items:center;gap:7px;min-width:150px;max-width:210px;text-align:left;background:var(--gray);border:2px outset var(--edge);padding:5px 9px;font:12px Tahoma,Verdana,sans-serif;color:var(--text);cursor:default;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.task.active{border-style:inset;background:var(--active);font-weight:bold}
+.task .ticon{width:16px;height:16px;background:var(--gray);border:1px solid var(--dark);display:grid;place-items:center;font:bold 10px Tahoma;color:var(--heading);flex:0 0 auto}
+.taskbar .spacer{flex:1}
+.taskbar .clock{border:2px inset var(--edge);padding:1px 9px;font:11px Tahoma,sans-serif;color:var(--dim);text-align:center;cursor:default;-webkit-user-select:none;user-select:none;display:flex;flex-direction:column;gap:0;align-items:center;justify-content:center;white-space:nowrap;line-height:1.12}
+/* время — сверху, крупнее и темнее; дата — под ним, чуть мельче */
+.taskbar .clock .ctime{color:var(--text);font-size:11px}
+.taskbar .clock .cdate{color:var(--dim);font-size:10px}
+.taskbar .clock.on{border-style:inset;background:var(--active)}
+/* --- календарь, открывается кликом по часам --------------------------- */
+.calpop{position:absolute;right:8px;bottom:42px;width:216px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005;z-index:600}
+.calpop[hidden]{display:none}
+.cal-head{display:flex;align-items:center;gap:3px;background:linear-gradient(90deg,var(--blue),var(--blue-2));color:#fff;padding:3px 4px}
+.cal-title{flex:1;text-align:center;font:bold 11px Tahoma,sans-serif;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cal-nav{width:21px;height:19px;background:var(--gray);border:2px outset var(--edge);font:9px Tahoma,sans-serif;color:var(--text);display:grid;place-items:center;padding:0;cursor:default}
+.cal-nav:active{border-style:inset}
+.cal-grid{width:100%;table-layout:fixed;border-collapse:collapse;margin-top:4px;background:var(--surface);border:2px inset var(--edge)}
+.cal-grid th{font:bold 10px Tahoma,sans-serif;color:var(--heading);background:var(--gray);border:1px solid var(--dark);padding:3px 0}
+.cal-grid td{font:11px Tahoma,sans-serif;text-align:center;padding:4px 0;color:var(--text);cursor:default}
+.cal-grid td.muted{color:var(--muted)}
+.cal-grid td:not(.muted):hover{background:var(--blue);color:#fff}
+.cal-grid td.today{font-weight:bold;outline:1px dotted var(--dot);outline-offset:-3px}
+.cal-grid td.sel{background:var(--blue);color:#fff;font-weight:bold}
+.cal-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:4px}
+.cal-date{font:10px Tahoma,sans-serif;color:var(--dim);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cal-btn{background:var(--gray);border:2px outset var(--edge);font:11px Tahoma,sans-serif;padding:3px 9px;color:var(--text);cursor:default}
+.cal-btn:active{border-style:inset}
+.titlebar{height:30px;background:linear-gradient(90deg,var(--blue),var(--blue-2));color:#fff;display:flex;align-items:center;justify-content:space-between;padding:3px 5px 3px 9px;font-weight:bold;letter-spacing:.1px}
+.titleleft{display:flex;align-items:center;gap:8px}.appicon{width:18px;height:18px;background:var(--gray);border:2px outset var(--edge);display:grid;place-items:center;color:var(--heading);font-weight:bold;font-size:11px}
+.window-controls{display:flex;gap:3px}.winbtn{width:22px;height:20px;background:var(--gray);border:2px outset var(--edge);display:grid;place-items:center;font:bold 12px Tahoma;color:var(--text);line-height:1}
+.menubar{display:flex;gap:6px;padding:4px 6px;position:relative;z-index:60}
+.menuitem{position:relative;padding:5px 10px;border:2px solid transparent;cursor:default;user-select:none;white-space:nowrap;line-height:1.1}
+.menuitem:first-letter{text-decoration:underline}
+.menuitem:hover{border-color:var(--light) var(--black) var(--black) var(--light);background:var(--mid)}
+.menuitem.open,.menuitem:active{border-color:var(--dark) var(--light) var(--light) var(--dark);background:var(--active-2)}
+.menu{display:none;position:absolute;top:100%;left:0;min-width:190px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);box-shadow:2px 2px 0 #0004;padding:3px;z-index:100}
+.menuitem.open .menu{display:block}
+.menu button{display:flex;align-items:center;justify-content:space-between;gap:18px;width:100%;text-align:left;background:transparent;border:0;font:12px Tahoma,Verdana,sans-serif;color:var(--text);padding:5px 9px;cursor:default}
+.menu button:hover{background:var(--blue);color:#fff}
+.menu button .sc{color:var(--dim-3);font-size:11px}
+.menu button:hover .sc{color:#cfe0ff}
+.menu .sep{height:1px;margin:4px;background:var(--dark);border-bottom:1px solid var(--light)}
+.content{border:2px inset var(--edge);padding:18px;background:var(--gray)}
+.welcome{border:2px inset var(--edge);background:var(--surface-2);padding:12px 13px;margin-bottom:14px}.welcome h1{font-size:21px;margin:0 0 7px;font-weight:bold;color:var(--heading)}.welcome p{margin:0;line-height:1.45;color:var(--text-2)}
+.hosts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:15px}.field label{display:block;font-size:11px;font-weight:bold;margin:0 0 5px}.field input{width:100%;min-width:0;padding:6px 7px;background:var(--surface);border:2px inset var(--edge);border-radius:0;font:12px Tahoma, sans-serif;color:var(--text);outline-color:var(--heading)}
+.group-title{font-weight:bold;background:var(--blue);color:#fff;padding:6px 8px;margin-bottom:9px}
+.services{display:grid;gap:9px}.service{display:grid;grid-template-columns:37px minmax(0,1fr);gap:10px;align-items:start;background:var(--card);border:2px outset var(--edge);padding:10px}.iconbox{width:35px;height:35px;border:2px inset var(--edge);background:var(--surface-2);display:grid;place-items:center;font-size:19px;line-height:1;color:var(--heading);font-weight:bold;font-family:"Segoe UI Emoji","Noto Color Emoji","Apple Color Emoji",Tahoma,sans-serif}
+.iconbox.is-number{font-family:Tahoma,Verdana,sans-serif;font-size:14px;line-height:1}
+body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14px;font-weight:bold;color:var(--heading);margin:0 0 4px}.service p{font-size:11px;color:var(--dim);margin:0 0 9px}.actions{display:flex;gap:7px;flex-wrap:wrap}.actions a{display:inline-block;text-align:center;text-decoration:none;color:var(--text);background:var(--gray);border:2px outset var(--edge);padding:6px 9px;font-size:11px;min-width:76px}.actions a:active{border-style:inset;padding:7px 8px 5px 10px}.actions a:hover{background:var(--hover)}
+.art-stage{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#2b2b2b;border:2px inset #7a7a7a;box-shadow:inset 0 0 0 1px #1c1c1c}
+.art-wrap{display:inline-flex;align-items:center;justify-content:center;overflow:hidden;padding:10px;max-width:100%}pre{font-family:"DejaVu Sans Mono","Noto Sans Mono",monospace;font-size:11px;line-height:1.05;color:#e8e8e8;white-space:pre;margin:0;max-width:none;font-weight:500;flex-shrink:0}
+.statusbar{display:flex;gap:4px;margin:6px 2px 2px;flex:0 0 auto}.statusbar div{border:2px inset var(--edge);padding:5px 8px;font-size:11px;color:var(--text-2)}.statusbar div:first-child{flex:1}.footer{margin-top:9px;text-align:right;color:var(--text-2);font-size:10px}
+/* --- System Monitor ---------------------------------------------------- */
+#winMonitor{min-width:180px;min-height:150px}
+.monitor-body{display:flex;flex-direction:column;padding:12px;overflow-y:auto;overflow-x:hidden}
+.monitor-inner{display:flex;flex-direction:column;gap:9px;margin:auto 0}
+.metric{display:grid;grid-template-columns:56px minmax(0,1fr) 78px;gap:8px;align-items:center}
+.metric-label{font:bold 11px Tahoma,sans-serif;color:var(--heading);letter-spacing:.2px}
+.gauge{height:17px;background:var(--surface);border:2px inset var(--edge);overflow:hidden;flex:0 0 auto}
+.gauge-fill{height:100%;width:0;background:repeating-linear-gradient(90deg,var(--blue) 0 9px,var(--surface) 9px 12px);transition:width .35s linear}
+.metric-value{font:11px Tahoma,sans-serif;color:var(--text-3);text-align:center;background:var(--surface);border:2px inset var(--edge);padding:4px 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* заголовок раздела (Storage / RAID) */
+.section{display:flex;align-items:center;gap:7px;font:bold 10px Tahoma,sans-serif;letter-spacing:.4px;text-transform:uppercase;color:#fff;background:var(--blue);padding:3px 7px}
+.section .scount{margin-left:auto;font-weight:normal;text-transform:none;background:var(--gray);color:var(--heading);padding:0 6px;border:1px inset var(--edge)}
+/* строка диска или массива */
+.slist{display:flex;flex-direction:column;gap:8px}
+.srow{display:flex;flex-direction:column;gap:4px;min-width:0}
+.srow-head{display:flex;align-items:baseline;gap:7px;min-width:0}
+.srow-name{font:bold 11px Tahoma,sans-serif;color:var(--heading);white-space:nowrap}
+.srow-meta{flex:1 1 auto;min-width:0;font-size:9px;color:var(--dim-4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srow-val{flex:0 0 auto;font:11px Tahoma,sans-serif;color:var(--text-3);background:var(--surface);border:2px inset var(--edge);padding:2px 6px;white-space:nowrap}
+.srow-sub{font-size:9px;color:var(--dim-4);line-height:1.35;overflow:hidden}
+.srow.is-warn .gauge-fill{background:repeating-linear-gradient(90deg,var(--warn) 0 9px,var(--surface) 9px 12px)}
+.srow.is-work .gauge-fill{background:repeating-linear-gradient(90deg,var(--warn) 0 9px,var(--surface) 9px 12px)}
+.srow.is-crit .gauge-fill,.srow.is-bad .gauge-fill{background:repeating-linear-gradient(90deg,var(--crit) 0 9px,var(--surface) 9px 12px)}
+.srow.is-crit .srow-val,.srow.is-bad .srow-val{color:var(--crit);font-weight:bold}
+/* физические диски внутри RAID-массива */
+.parts{display:flex;flex-wrap:wrap;gap:4px 6px}
+.part{display:inline-flex;align-items:center;gap:4px;font-size:9px;color:var(--dim);background:var(--card);border:1px outset var(--edge);padding:1px 5px;white-space:nowrap}
+.part .flag{font-weight:bold;line-height:1}
+.part.ok .flag{color:var(--ok)}
+.part.spare .flag{color:var(--spare)}
+.part.failed{background:var(--fail-bg);color:var(--fail-fg);border-style:inset}
+.part.failed .flag{color:var(--crit)}
+.monitor-status{display:flex;justify-content:space-between;gap:8px;font-size:10px;color:var(--dim);border-top:1px solid var(--dark);padding-top:7px;margin-top:1px}
+.monitor-status span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+#winMonitor.monitor-offline .gauge-fill{background:repeating-linear-gradient(90deg,var(--dark) 0 9px,var(--surface) 9px 12px);transition:none}
+#winMonitor.monitor-offline .metric-value,#winMonitor.monitor-offline .srow-val{color:var(--dim-5)}
+#winMonitor.monitor-offline .part{opacity:.55}
+#winMonitor.monitor-offline [data-monitor-status]{color:var(--crit);font-weight:bold}
+.titlebar .titleleft{min-width:0}
+.titlebar .titleleft>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.titlebar .appicon{flex:0 0 auto}
+/* узкое окно — плотная раскладка строк метрик */
+.monitor-body.compact{padding:8px}
+.monitor-body.compact .monitor-inner{gap:7px}
+.monitor-body.compact .metric{grid-template-columns:40px minmax(0,1fr) 60px;gap:5px}
+.monitor-body.compact .metric-label{font-size:10px}
+.monitor-body.compact .metric-value{font-size:10px;padding:4px 2px}
+.monitor-body.compact .srow-name{font-size:10px}
+.monitor-body.compact .srow-val{font-size:10px;padding:2px 4px}
+.monitor-body.compact .srow-meta,.monitor-body.compact .srow-sub,.monitor-body.compact .part{font-size:8px}
+.monitor-body.compact .monitor-status{font-size:9px;padding-top:5px}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;padding:20px;z-index:1000}
+.modal-overlay[hidden]{display:none}
+/* Конструктор раскладки — плавающая палитра (не окно панели, в раскладку не входит) */
+.layout-palette{position:fixed;width:252px;max-width:calc(100vw - 16px);z-index:950}
+.layout-palette[hidden]{display:none}
+.palette-body{display:flex;flex-direction:column;gap:7px;padding:7px 6px 8px}
+.palette-group{border:2px inset var(--edge);background:var(--surface);padding:5px 6px 6px;max-height:132px;overflow:auto}
+.palette-head{font-size:11px;font-weight:bold;color:var(--heading);margin-bottom:3px}
+.palette-group label{display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0;cursor:pointer;color:var(--text-strong)}
+.palette-group label.is-off{color:var(--dim-4)}
+.palette-group label input{margin:0}
+.palette-actions{display:flex;gap:6px}
+.palette-actions button{flex:1;font:11px Tahoma,sans-serif;padding:4px 6px;border:2px outset var(--edge);background:var(--gray);color:var(--text-strong);cursor:pointer}
+.palette-actions button:active{border-color:var(--black) var(--light) var(--light) var(--black)}
+.palette-hint{font-size:10px;color:var(--text-2);line-height:1.35}
+.help-window{width:min(560px,100%);max-height:80vh;display:flex;flex-direction:column;box-shadow:4px 4px 0 #0006}
+.help-window .titlebar{cursor:move}
+.help-body{flex:1 1 auto;overflow:auto;background:var(--surface);padding:16px;color:var(--text)}
+.help-body h1{margin:0 0 10px;font-size:18px;color:var(--heading)}
+.help-body p,.help-body li{line-height:1.5;margin:0 0 10px}
+.help-body code{background:var(--surface-2);border:1px solid var(--line);padding:1px 4px;font-family:"DejaVu Sans Mono",monospace}
+.winbtn[data-close]{cursor:default}
+/* --- Picture Viewer: картинки и GIF --------------------------------- */
+.art-img{display:block;-webkit-user-select:none;user-select:none;-webkit-user-drag:none}
+.art-img[hidden]{display:none}
+#winArt.dropping .art-stage{outline:2px dashed #6cf;outline-offset:-6px}
+.open-window{width:min(470px,100%)}
+.open-body{border:2px inset var(--edge);padding:14px;background:var(--gray);display:flex;flex-direction:column;gap:10px}
+.open-label{font:bold 11px Tahoma,sans-serif;color:var(--heading)}
+.open-row{display:flex;gap:7px;align-items:center}
+.open-input{flex:1 1 auto;min-width:0;border:2px inset var(--edge);background:var(--surface);padding:5px 6px;font:11px Tahoma,sans-serif;color:var(--text)}
+.open-hint{font:10px Tahoma,sans-serif;color:var(--dim-2);line-height:1.45}
+.open-hint code{background:var(--surface);border:1px solid var(--line-2);padding:0 3px;font-family:"DejaVu Sans Mono",monospace;color:var(--text)}
+.open-err{font:bold 10px Tahoma,sans-serif;color:var(--error);line-height:1.45}
+.open-actions{display:flex;justify-content:flex-end;gap:7px}
+.open-btn{background:var(--gray);border:2px outset var(--edge);font:11px Tahoma,sans-serif;padding:5px 14px;color:var(--text);cursor:default}
+.open-btn:active{border-style:inset}
+/* --- Audio Player ------------------------------------------------------ */
+#winMusic{min-width:250px;min-height:210px}
+.music-body{display:flex;flex-direction:column;gap:6px;padding:10px;overflow:hidden}
+.music-inner{display:flex;flex-direction:column;gap:7px;min-height:0;flex:1 1 auto}
+.music-lcd{background:#000;border:2px inset var(--edge);padding:6px 8px;color:#39ff6a;font:11px "DejaVu Sans Mono",monospace;line-height:1.4;min-width:0;flex:0 0 auto}
+.music-track{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.music-time{color:#7f7;font-size:10px;text-align:right}
+.music-seek{height:14px;background:var(--surface);border:2px inset var(--edge);cursor:pointer;flex:0 0 auto;position:relative;overflow:hidden}
+.music-seek-fill{height:100%;width:0;background:var(--blue)}
+.music-controls{display:flex;gap:5px;flex:0 0 auto}
+.music-btn{flex:1 1 0;background:var(--gray);border:2px outset var(--edge);font:12px Tahoma,sans-serif;padding:4px 0;cursor:default;color:var(--text)}
+.music-btn:active{border-style:inset;background:var(--active)}
+.music-row{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.music-lbl{font:10px Tahoma,sans-serif;color:var(--text-2)}
+.music-vol{flex:1 1 auto;min-width:40px;height:16px;accent-color:var(--heading)}
+.music-tgl{width:26px;height:22px;background:var(--gray);border:2px outset var(--edge);font:bold 10px Tahoma,sans-serif;color:var(--dim-3);cursor:default;flex:0 0 auto}
+.music-tgl.on{border-style:inset;background:var(--active);color:var(--heading)}
+.music-list{flex:1 1 auto;min-height:48px;overflow:auto;background:var(--surface);border:2px inset var(--edge)}
+.music-item{display:block;width:100%;text-align:left;background:none;border:0;padding:4px 6px;font:11px Tahoma,sans-serif;color:var(--text);cursor:default;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.music-item:hover{background:var(--hover-2)}
+.music-item.playing{background:var(--blue);color:#fff}
+.music-status{font:10px Tahoma,sans-serif;color:var(--dim-2);flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* --- Скины плеера (Qmmp = Winamp 2) ------------------------------------ */
+/* Панель выбора скина: список из skins/ + кнопка «прочитать .wsz с диска» */
+.music-skins{display:flex;gap:5px;align-items:center;flex:0 0 auto}
+.music-skin-sel{flex:1 1 auto;min-width:0;height:22px;font:11px Tahoma,sans-serif;background:var(--surface);border:2px inset var(--edge);color:var(--text)}
+.music-skin-btn{flex:0 0 auto;height:22px;padding:0 7px;background:var(--gray);border:2px outset var(--edge);font:11px Tahoma,sans-serif;color:var(--text);cursor:default}
+.music-skin-btn:active{border-style:inset;background:var(--active)}
+/* Холст, на котором рисуется окно Winamp: два канваса — главный и плейлист */
+.skin-host{display:none;flex:1 1 auto;min-height:0;overflow:auto;background:#202020;align-items:flex-start}
+.skin-host.on{display:flex;flex-direction:column}
+.skin-host canvas{display:block;image-rendering:pixelated;cursor:default;flex:0 0 auto}
+.music-inner.off{display:none}
+.music-skins.off{display:none}
+@media(max-width:500px){.hosts{grid-template-columns:1fr}.art-wrap{padding:5px}.menubar{gap:2px}.menuitem{padding:5px 6px}.service{padding:8px}.task{min-width:0}}
+/* совсем узко: остаются только иконки, чтобы часы гарантировально влезали */
+@media(max-width:420px){.task{min-width:0;justify-content:center;padding:5px 6px}.task .tlabel{display:none}}
+
+/* ==========================================================================
+   ТЁМНАЯ ТЕМА — только переопределение переменных, в стилях выше ничего не
+   меняется, поэтому светлая тема остаётся ровно такой же, как была.
+   Включается двумя способами:
+     1) CONFIG.theme='dark' в config.js (там же документация);
+     2) кнопкой «Dark theme» во вкладке View — выбор запоминается в браузере
+        и уезжает в раскладку на сервере, так что он один на всех
+        устройствах; «Reset window layout» возвращает тему из config.js.
+   Цвета взяты под включение Dark Reader: бирюзовый рабочий стол, почти
+   чёрные тела окон, тёмно-синие заголовки, светло-голубые подписи, белый
+   текст, синие и оранжевые шкалы.
+   ========================================================================== */
+html[data-theme=dark]{
+ --desktop:#147a74;      /* рабочий стол */
+ --gray:#262626;         /* тело окна, таскбар, пункты меню */
+ --light:#5e5e5e;        /* светлый край рамки (слева/сверху) */
+ --mid:#3a3a3a;          /* промежуточные заливки */
+ --dark:#4a4a4a;         /* тёмный край рамки (справа/снизу) */
+ --black:#0b0b0b;        /* почти чёрный: правый край и тени */
+ --blue:#1a4fb8;         /* синий: заголовки, нажатые кнопки */
+ --navy:#0d2f8f;
+ --edge:#6b6b6b;         /* края врезных/выпуклых рамок */
+ --blue-2:#2f7ad0;       /* второй цвет градиента заголовка */
+ --text:#e8e8e8;         /* основной текст */
+ --text-2:#c9c9c9;
+ --text-3:#dcdcdc;
+ --text-strong:#f2f2f2;
+ --dim:#a6a6a6;          /* приглушённые подписи */
+ --dim-2:#9e9e9e;
+ --dim-3:#9a9a9a;
+ --dim-4:#939393;
+ --dim-5:#8f8f8f;
+ --muted:#7d7d7d;
+ --dot:#cfcfcf;          /* пунктирный контур фокуса */
+ --heading:#79b9ff;      /* подписи заголовков (в светлой — тёмно-синий) */
+ --error:#ff7b7b;
+ --crit:#e05555;         /* красная шкала */
+ --ok:#5fd07f;
+ --spare:#e0b04a;
+ --fail-fg:#ffb3b3;
+ --fail-bg:#5a2b2b;
+ --line:#5a5a5a;
+ --line-2:#555;
+ --surface:#141414;      /* поля ввода, списки, шкалы */
+ --surface-2:#1d1d1d;    /* блоки приветствия и справки */
+ --card:#333;            /* карточка сервиса */
+ --active:#3f3f3f;       /* нажатое/выбранное */
+ --active-2:#454545;
+ --hover:#3d3d3d;
+ --hover-2:#3d3d3d;
+ --warn:#e08a1e;         /* оранжевая шкала предупреждения */
+}
+/* холст арта и подложка скина должны отличаться от тёмного тела окна */
+html[data-theme=dark] .art-stage{background:#191919;border-color:#5a5a5a;box-shadow:inset 0 0 0 1px #0e0e0e}
+html[data-theme=dark] .skin-host{background:#141414}
+/* полосы прокрутки — под тему */
+html[data-theme=dark] *{scrollbar-color:#5a5a5a #1b1b1b;scrollbar-width:thin}
+html[data-theme=dark] ::-webkit-scrollbar{width:14px;height:14px}
+html[data-theme=dark] ::-webkit-scrollbar-track{background:#1b1b1b}
+html[data-theme=dark] ::-webkit-scrollbar-thumb{background:#5a5a5a;border:2px outset #6b6b6b}
+html[data-theme=dark] ::-webkit-scrollbar-button{background:#3a3a3a;border:2px outset #6b6b6b}
+</style>
+<script src="config.js"></script>
+<script>
+/* Тема — до первой отрисовки, чтобы рабочий стол не мигнул светлым.
+   Порядок: выбор кнопки View (localStorage) -> CONFIG.theme -> светлая.
+   Тот же порядок повторяет applyConfig() в основном скрипте ниже. */
+(function(){
+ var t=null;
+ try{t=localStorage.getItem('nerevar-hub.theme')}catch(e){}
+ if(t!=='dark'&&t!=='light')t=(window.CONFIG&&window.CONFIG.theme==='dark')?'dark':'light';
+ document.documentElement.setAttribute('data-theme',t);
+})();
+</script>
+</head>
+<body>
+<div class="scene" id="scene">
+  <section class="appwindow" id="winServers">
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-server-icon>S</span><span data-server-name>My Home Server</span></div><div class="window-controls"><span class="winbtn" data-win-min="winServers">_</span><span class="winbtn" data-win-max="winServers">□</span><span class="winbtn" data-win-close="winServers">×</span></div></div>
+    <nav class="menubar">
+      <div class="menuitem" data-menu>File
+        <div class="menu">
+          <button data-action="reload">Refresh</button>
+          <button data-action="copy-links">Copy service links</button>
+          <div class="sep"></div>
+          <button data-action="open-image">Open image…</button>
+          <button data-action="back-ascii">Back to ASCII art</button>
+          <div class="sep"></div>
+          <button data-action="audio">Audio player</button>
+          <div class="sep"></div>
+          <button data-action="exit">Exit</button>
+        </div>
+      </div>
+      <div class="menuitem" data-menu>View
+        <div class="menu">
+          <button data-action="zoom-in">Zoom in<span class="sc">+</span></button>
+          <button data-action="zoom-out">Zoom out<span class="sc">&minus;</span></button>
+          <button data-action="zoom-reset">Reset zoom</button>
+          <div class="sep"></div>
+          <button data-action="toggle-services">Show / hide services</button>
+          <div class="sep"></div>
+          <button data-action="layout">Layout constructor…</button>
+          <button data-action="layout-save">Save window layout</button>
+          <button data-action="layout-reset">Reset window layout</button>
+          <div class="sep"></div>
+          <button data-action="theme">Dark theme<span class="sc" data-theme-mark>✓</span></button>
+          <div class="sep"></div>
+          <button data-action="toggle-fullscreen">Fullscreen</button>
+        </div>
+      </div>
+      <div class="menuitem" data-action="favorite">Favorites</div>
+      <div class="menuitem" data-action="help">Help</div>
+    </nav>
+    <div class="winbody">
+          <section class="welcome"><h1>Welcome</h1><p>Personal home server dashboard. Replace this text with your own description.</p></section>
+          <div class="hosts">
+            <div class="field"><label for="lanHost">Local network address</label><input id="lanHost" value="192.168.1.10" placeholder="192.168.1.10"></div>
+            <div class="field"><label for="tailHost">Tailscale address</label><input id="tailHost" value="myhost" placeholder="100.x.y.z / myhost"></div>
+          </div>
+<div class="group-title">Available services</div>
+          <div class="services"></div>
+        </div>
+    <div class="statusbar"><div>Ready</div><div>6 services</div><div>Local / Tailscale</div></div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <section class="appwindow" id="winArt">
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-art-icon>P</span><span><span data-art-title>Picture Viewer</span> &mdash; <span data-art-file>ASCII_ART.TXT</span></span></div><div class="window-controls"><span class="winbtn" data-win-min="winArt">_</span><span class="winbtn" data-win-max="winArt">□</span><span class="winbtn" data-win-close="winArt">×</span></div></div>
+    <div class="winbody art-body">
+      <div class="art-stage"><div class="art-wrap"><pre><!-- ASCII-арт живёт отдельно: pics/ASCII_ART.TXT, сюда он подставляется при загрузке (CONFIG.artFile). --></pre><img class="art-img" alt="" hidden></div></div></div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <section class="appwindow" id="winMonitor" data-autoplace="1" hidden>
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-monitor-icon>M</span><span data-monitor-title>System Monitor</span></div><div class="window-controls"><span class="winbtn" data-win-min="winMonitor">_</span><span class="winbtn" data-win-max="winMonitor">□</span><span class="winbtn" data-win-close="winMonitor">×</span></div></div>
+    <div class="winbody monitor-body">
+      <div class="monitor-inner">
+        <div class="metric" data-metric="cpu"><div class="metric-label">CPU</div><div class="gauge"><div class="gauge-fill"></div></div><div class="metric-value">&mdash;</div></div>
+        <div class="metric" data-metric="ram"><div class="metric-label">RAM</div><div class="gauge"><div class="gauge-fill"></div></div><div class="metric-value">&mdash;</div></div>
+        <div class="metric" data-metric="load"><div class="metric-label">Load</div><div class="gauge"><div class="gauge-fill"></div></div><div class="metric-value">&mdash;</div></div>
+        <!-- Разделы Storage и RAID заполняются из /api/stats (см. renderStorage) -->
+        <div class="section" data-storage-head hidden><span>Storage</span><span class="scount" data-storage-count></span></div>
+        <div class="slist" data-disk-list></div>
+        <div class="section" data-raid-head hidden><span>RAID</span><span class="scount" data-raid-count></span></div>
+        <div class="slist" data-raid-list></div>
+        <div class="monitor-status"><span data-monitor-status>Waiting&hellip;</span><span data-monitor-uptime></span></div>
+      </div>
+    </div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <section class="appwindow" id="winMusic" hidden>
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-music-icon>A</span><span data-music-title>Audio Player</span></div><div class="window-controls"><span class="winbtn" data-win-min="winMusic">_</span><span class="winbtn" data-win-max="winMusic">□</span><span class="winbtn" data-win-close="winMusic">×</span></div></div>
+    <div class="winbody music-body">
+      <div class="music-skins" data-skin-bar>
+        <select class="music-skin-sel" data-skin-select title="Qmmp / Winamp 2 skins"></select>
+        <button class="music-skin-btn" type="button" data-skin-open title="Load a .wsz / .zip skin from this computer">Skin&hellip;</button>
+        <input type="file" data-skin-file accept=".wsz,.zip" hidden>
+      </div>
+      <div class="skin-host" data-skin-host></div>
+      <div class="music-inner">
+        <div class="music-lcd">
+          <div class="music-track" data-music-track>No track</div>
+          <div class="music-time"><span data-music-cur>0:00</span> / <span data-music-dur>0:00</span></div>
+        </div>
+        <div class="music-seek" data-music-seek title="Click to seek"><div class="music-seek-fill" data-music-seek-fill></div></div>
+        <div class="music-controls">
+          <button class="music-btn" type="button" data-music="prev" title="Previous">&#9664;&#9664;</button>
+          <button class="music-btn music-play" type="button" data-music="play" title="Play / Pause">&#9654;</button>
+          <button class="music-btn" type="button" data-music="stop" title="Stop">&#9632;</button>
+          <button class="music-btn" type="button" data-music="next" title="Next">&#9654;&#9654;</button>
+        </div>
+        <div class="music-row">
+          <span class="music-lbl">Vol</span>
+          <input class="music-vol" type="range" min="0" max="100" step="1" value="80" data-music-vol aria-label="Volume">
+          <button class="music-tgl" type="button" data-music="shuffle" title="Shuffle">S</button>
+          <button class="music-tgl" type="button" data-music="loop" title="Repeat">R</button>
+        </div>
+        <div class="music-list" data-music-list></div>
+      </div>
+      <div class="music-status" data-music-status>Loading&hellip;</div>
+    </div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+</div>
+<audio id="musicAudio" preload="metadata"></audio>
+<div class="taskbar" id="taskbar">
+  <button class="task" data-window="winServers"><span class="ticon" data-server-icon>S</span><span class="tlabel" data-server-name>My Home Server</span></button>
+  <button class="task" data-window="winArt"><span class="ticon" data-art-icon>P</span><span class="tlabel" data-art-title>Picture Viewer</span></button>
+  <button class="task" data-window="winMonitor"><span class="ticon" data-monitor-icon>M</span><span class="tlabel" data-monitor-title>System Monitor</span></button>
+  <button class="task" data-window="winMusic"><span class="ticon" data-music-icon>A</span><span class="tlabel" data-music-title>Audio Player</span></button>
+  <span class="spacer"></span>
+  <div class="clock" id="clock"><span class="ctime" data-clock-time>--:--</span><span class="cdate" data-clock-date>--</span></div>
+</div>
+<!-- Календарь: открывается кликом по часам в таскбаре -->
+<div class="calpop" id="calPop" hidden>
+  <div class="cal-head">
+    <button class="cal-nav" data-cal="prev" title="Previous month">&#9664;</button>
+    <span class="cal-title" data-cal-label>--</span>
+    <button class="cal-nav" data-cal="next" title="Next month">&#9654;</button>
+  </div>
+  <table class="cal-grid">
+    <thead><tr><th>Su</th><th>Mo</th><th>Tu</th><th>We</th><th>Th</th><th>Fr</th><th>Sa</th></tr></thead>
+    <tbody data-cal-body></tbody>
+  </table>
+  <div class="cal-foot">
+    <span class="cal-date" data-cal-long></span>
+    <button class="cal-btn" data-cal-today>Today</button>
+  </div>
+</div>
+<div class="modal-overlay" id="helpOverlay" hidden>
+  <section class="window help-window" id="helpWindow">
+    <div class="titlebar" data-drag-window>
+      <div class="titleleft"><span class="appicon">?</span><span><span data-help-title>Help</span> &mdash; <span data-server-name>My Home Server</span></span></div>
+      <div class="window-controls"><span class="winbtn" data-close="helpOverlay">&times;</span></div>
+    </div>
+    <!-- Содержимое справки берётся из CONFIG.help (файл config.js).
+     Чтобы задать его прямо в разметке — просто напиши свой HTML
+     внутрь <div data-help-body> ... </div>, он будет перезаписан при загрузке. -->
+    <div class="content help-body" data-help-body>
+      <h1>Help</h1>
+      <p>Replace this help text with your own.</p>
+    </div>
+  </section>
+</div>
+<!-- Диалог открытия картинки (File → Open image…) -->
+<div class="modal-overlay" id="openOverlay" hidden>
+  <section class="window open-window">
+    <div class="titlebar">
+      <div class="titleleft"><span class="appicon">P</span><span>Open image</span></div>
+      <div class="window-controls"><span class="winbtn" data-close="openOverlay">&times;</span></div>
+    </div>
+    <div class="open-body">
+      <label class="open-label" for="artUrl">File or URL</label>
+      <div class="open-row">
+        <input class="open-input" id="artUrl" type="text" spellcheck="false" autocomplete="off"
+               placeholder="http://192.168.1.10/pics/cat.gif">
+        <button class="open-btn" id="artBrowse" type="button">Browse…</button>
+      </div>
+      <div class="open-hint">PNG · JPG · GIF (animated) · WEBP · SVG — or simply drop a file
+        onto the Picture Viewer window.<br>
+        From this server: <code>/pics/your-file.gif</code> — or <code>~.jpg</code>,
+        <code>~.gif</code>, <code>~</code> for a random one from <code>pics/</code>.</div>
+      <div class="open-err" id="artErr" hidden></div>
+      <div class="open-actions">
+        <button class="open-btn" id="artOpenOk" type="button">Open</button>
+        <button class="open-btn" data-close="openOverlay" type="button">Cancel</button>
+      </div>
+    </div>
+  </section>
+</div>
+<!-- Конструктор раскладки (View → Layout constructor…): какие окна открыты,
+     где они стоят и какие карточки services показывать. Сохраняется на сервер. -->
+<div class="window layout-palette" id="layoutPalette" hidden>
+  <div class="titlebar" data-palette-drag>
+    <div class="titleleft"><span class="appicon">L</span><span>Layout constructor</span></div>
+    <div class="window-controls"><span class="winbtn" data-palette-close>&times;</span></div>
+  </div>
+  <div class="palette-body">
+    <div class="palette-group"><div class="palette-head">Windows</div><div data-palette-wins></div></div>
+    <div class="palette-group"><div class="palette-head">Available services</div><div data-palette-svc></div></div>
+    <div class="palette-actions">
+      <button type="button" data-palette-save>Save layout</button>
+      <button type="button" data-palette-reset>Reset layout</button>
+    </div>
+    <div class="palette-hint">Arrange the windows (drag, resize, open/close), tick the services
+      you need and press Save — the panel will open exactly like this everywhere.</div>
+  </div>
+</div>
+<input type="file" id="artFileInput" accept="image/*" hidden>
+<script>
+/* ==========================================================================
+   НАСТРОЙКИ живут в отдельном файле config.js (рядом с index.html).
+   Правится только он: сохранил — обновил страницу (F5).
+   ========================================================================== */
+if(!window.CONFIG){
+ const msg='config.js not found — put config.js next to index.html (all panel settings live there)';
+ document.documentElement.insertAdjacentHTML('beforeend',
+  '<div style="position:fixed;inset:0;background:var(--blue);color:#fff;'+
+  'font:14px Tahoma,sans-serif;display:flex;align-items:center;'+
+  'justify-content:center;text-align:center;padding:24px;z-index:99999">'+msg+'</div>');
+ throw new Error(msg);
+}
+const CONFIG=window.CONFIG;
+/* ========================================================================== */
+
+const lanInput=document.querySelector('#lanHost');
+const tailInput=document.querySelector('#tailHost');
+
+/* Карточки services, выключенные в конструкторе раскладки (индексы из CONFIG).
+   Объявлено до applyConfig() — тот сразу зовёт renderServices(). */
+let hiddenSvc=new Set();
+
+function renderServices(){
+ const box=document.querySelector('.services');
+ const visible=[];
+ CONFIG.services.forEach((svc,i)=>{if(!hiddenSvc.has(i))visible.push({svc,i})});
+ box.innerHTML=visible.map(({svc,i})=>{
+  const isNumber=(svc.icon==null||svc.icon==='');
+  const icon=isNumber?(i+1):svc.icon;            // номер берём из CONFIG, без пересчёта
+  const iconCls=isNumber?'iconbox is-number':'iconbox';
+  const port=`<span class="svc-port">${svc.port}</span>`;
+  const note=svc.note?`${svc.note} · ${port}`:port;
+  return `<article class="service"><div class="${iconCls}">${icon}</div><div><h2>${svc.name}</h2><p>${note}</p><div class="actions"><a data-host="lan" data-port="${svc.port}" href="#">LAN</a><a data-host="tail" data-port="${svc.port}" href="#">Tailscale</a></div></div></article>`;
+ }).join('');
+ updateLinks();                               // новые ссылки сразу получают адреса
+ const counter=document.querySelector('.statusbar div:nth-child(2)');
+ if(counter)counter.textContent=`${visible.length} service${visible.length===1?'':'s'}`;
+}
+function renderHelp(){
+ const box=document.querySelector('[data-help-body]');
+ if(!box)return;
+ const h=CONFIG.help||{};
+ let html='';
+ if(h.title)html+='<h1>'+h.title+'</h1>';
+ if(h.intro)html+='<p>'+h.intro+'</p>';
+ if(Array.isArray(h.items)&&h.items.length)html+='<ul>'+h.items.map(i=>'<li>'+i+'</li>').join('')+'</ul>';
+ if(h.html)html+=h.html;
+ box.innerHTML=html;
+ const titleEl=document.querySelector('[data-help-title]');
+ if(titleEl)titleEl.textContent=h.windowTitle||'Help';
+}
+/* --- Тема оформления (config.js / кнопка во вкладке View) ------------------
+   Тёмная тема целиком описана блоком html[data-theme=dark] в style выше,
+   здесь только переключение и память выбора:
+     CONFIG.theme  — тема по умолчанию (для нового браузера);
+     localStorage  — выбор кнопки View, он же важнее config.js;
+     layout.json  — тема едет в раскладке на сервере, поэтому выбор
+                    одинаков на всех устройствах.
+   Вызывается ниже applyConfig() — объявлено до него. */
+const THEME_KEY='nerevar-hub.theme';
+let currentTheme=document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light';
+function applyTheme(name){                    // ставит атрибут, память не трогает
+ if(name!=='dark'&&name!=='light')name='light';
+ currentTheme=name;
+ document.documentElement.setAttribute('data-theme',name);
+ const mark=document.querySelector('[data-theme-mark]');
+ if(mark)mark.textContent=name==='dark'?'✓':'';   // галочка в меню View
+}
+function storedTheme(){                       // выбор кнопки View из этого браузера
+ try{const v=localStorage.getItem(THEME_KEY);if(v==='dark'||v==='light')return v}catch(e){}
+ return null;
+}
+function setTheme(name,remember){             // remember=false — забыть выбор
+ applyTheme(name);
+ try{remember?localStorage.setItem(THEME_KEY,name):localStorage.removeItem(THEME_KEY)}catch(e){}
+}
+function toggleTheme(){
+ const next=currentTheme==='dark'?'light':'dark';
+ setTheme(next,true);
+ scheduleLayoutSave();                        // тема поедет в раскладку на сервер
+ flashStatus('Theme: '+next);
+}
+function applyConfig(){
+ /* тема: выбор кнопки View -> CONFIG.theme -> светлая; память не трогаем */
+ applyTheme(storedTheme()||(CONFIG.theme==='dark'?'dark':'light'));
+ document.title=CONFIG.serverName;
+ document.querySelectorAll('[data-server-name]').forEach(el=>{el.textContent=CONFIG.serverName});
+ document.querySelectorAll('[data-server-icon]').forEach(el=>{el.textContent=CONFIG.serverIcon});
+ document.querySelectorAll('[data-art-title]').forEach(el=>{el.textContent=CONFIG.artWindowTitle});
+ document.querySelectorAll('[data-art-file]').forEach(el=>{el.textContent=baseName(CONFIG.artFile)});
+ document.querySelectorAll('[data-art-icon]').forEach(el=>{el.textContent=CONFIG.artIcon});
+ const mus=CONFIG.music||{};
+ document.querySelectorAll('[data-music-title]').forEach(el=>{el.textContent=mus.windowTitle||'Audio Player'});
+ document.querySelectorAll('[data-music-icon]').forEach(el=>{el.textContent=mus.icon||'A'});
+ const musWin=document.getElementById('winMusic');
+ const musBtn=document.querySelector('.task[data-window="winMusic"]');
+ if(mus.enabled===false){
+  if(musWin)musWin.hidden=true;
+  if(musBtn)musBtn.hidden=true;
+ }
+ const skinBar=document.querySelector('[data-skin-bar]');
+ if(skinBar)skinBar.classList.toggle('off',(mus.skins||{}).enabled===false);
+ document.body.classList.toggle('number-style-big',CONFIG.numberStyle==='big');
+ const mon=CONFIG.monitor||{};
+ document.querySelectorAll('[data-monitor-title]').forEach(el=>{el.textContent=mon.windowTitle||'System Monitor'});
+ document.querySelectorAll('[data-monitor-icon]').forEach(el=>{el.textContent=mon.icon||'M'});
+ const monWin=document.getElementById('winMonitor');
+ const monBtn=document.querySelector('.task[data-window="winMonitor"]');
+ if(monWin)monWin.hidden=mon.enabled===false;
+ if(monBtn)monBtn.hidden=mon.enabled===false;
+ const wt=document.querySelector('.welcome h1');
+ if(wt)wt.textContent=CONFIG.welcomeTitle;
+ const wp=document.querySelector('.welcome p');
+ if(wp)wp.textContent=CONFIG.welcomeText;
+ const footer=document.querySelector('.footer');
+ if(footer)footer.textContent=CONFIG.serverName;
+ lanInput.value=CONFIG.lanHost;
+ tailInput.value=CONFIG.tailscaleHost;
+ lanInput.placeholder=CONFIG.lanHost;
+ tailInput.placeholder=CONFIG.tailscaleHost;
+ renderServices();
+ renderHelp();
+}
+function cleanHost(value){return value.trim().replace(/^https?:\/\//i,'').replace(/\/+$/,'')}
+function updateLinks(){
+ const lan=cleanHost(lanInput.value),tail=cleanHost(tailInput.value);
+ document.querySelectorAll('a[data-port]').forEach(link=>{
+  const host=link.dataset.host==='lan'?lan:tail;
+  link.href=host?`http://${host}:${link.dataset.port}`:'#';
+  link.target='_blank';link.rel='noopener noreferrer';
+ });
+}
+applyConfig();
+lanInput.addEventListener('input',updateLinks);tailInput.addEventListener('input',updateLinks);updateLinks();
+
+const artStage=document.querySelector('.art-stage');
+const artWrap=artStage.querySelector('.art-wrap');
+const artPre=artWrap.querySelector('pre');
+const artImg=artWrap.querySelector('.art-img');
+const artWin=document.getElementById('winArt');
+const openOverlay=document.getElementById('openOverlay');
+const openInput=document.getElementById('artUrl');
+const fileInput=document.getElementById('artFileInput');
+let artMode='ascii';          // 'ascii' | 'image'
+let artBlobUrl=null;          // objectURL последнего открытого файла
+function isBlankLine(line){return line.replace(/[\s\u2800]/g,'').length===0}
+function normalizeArt(text){
+ const lines=text.split('\n');
+ let a=0,b=lines.length;
+ while(a<b&&isBlankLine(lines[a]))a++;
+ while(b>a&&isBlankLine(lines[b-1]))b--;
+ return lines.slice(a,b).join('\n');
+}
+let asciiZoom=1;
+let fitting=false;
+function fitAscii(){
+ if(fitting)return;
+ fitting=true;
+ try{
+  if(artMode==='image'){fitImageArt();return}
+  const normalized=normalizeArt(artPre.textContent);
+  if(normalized!==artPre.textContent)artPre.textContent=normalized;
+  const cs=getComputedStyle(artWrap);
+  const padX=parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight)+parseFloat(cs.borderLeftWidth)+parseFloat(cs.borderRightWidth);
+  const padY=parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom)+parseFloat(cs.borderTopWidth)+parseFloat(cs.borderBottomWidth);
+  const availW=artStage.clientWidth-padX;
+  const availH=artStage.clientHeight-padY;
+  const REF=100;
+  artPre.style.fontSize=REF+'px';
+  const artW=artPre.scrollWidth||1;
+  const artH=artPre.scrollHeight||1;
+  const scaleW=availW>0?availW/artW:Infinity;
+  const scaleH=availH>0?availH/artH:Infinity;
+  let scale=Math.min(scaleW,scaleH);
+  if(!isFinite(scale))scale=1;
+  scale*=asciiZoom;
+  artPre.style.fontSize=Math.max(1,REF*scale).toFixed(3)+'px';
+ }finally{fitting=false}
+}
+window.addEventListener('resize',fitAscii);
+if('ResizeObserver'in window)new ResizeObserver(fitAscii).observe(artStage);
+new MutationObserver(fitAscii).observe(artPre,{childList:true,characterData:true,subtree:true});
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fitAscii);
+fitAscii();
+
+/* --- pics/: единственное место, где лежат и картинки, и ascii-арт -------
+   В config.js — только имена файлов (CONFIG.artFile / CONFIG.picFile),
+   само содержимое читается с сервера отсюда. */
+function baseName(path){return String(path||'').split('/').pop()||''}
+function picsPath(name){return String(name||'').replace(/^\/?pics\//,'')}
+function picsUrl(name){
+ return 'pics/'+picsPath(name).split('/').map(encodeURIComponent).join('/');
+}
+let picsList=null;
+function fetchPics(){
+ if(picsList)return Promise.resolve(picsList);
+ return fetch('api/pics',{cache:'no-store'})
+  .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
+  .then(j=>{picsList={images:(j&&j.images)||[],art:(j&&j.art)||[]};return picsList});
+}
+/* читает ascii-арт из pics/ и подставляет в <pre> */
+async function loadArt(){
+ const name=(CONFIG.artFile||'').trim();
+ if(!name)return;
+ // '~' выбирает КАРТИНКУ — это поле не про арт; подсказываем прямо в ошибке
+ if(name.charAt(0)==='~'){
+  picFail(baseName(name),"'~' selects a picture - set it in CONFIG.picFile (artFile needs a text file)");
+  return;
+ }
+ try{
+  const r=await fetch(picsUrl(name),{cache:'no-store'});
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  const text=await r.text();
+  if(!text.replace(/[\s\u2800]/g,''))throw new Error('file is empty');
+  artPre.textContent=normalizeArt(text);
+  setArtFileName(baseName(name));
+  fitAscii();
+  autoSizeArt();
+ }catch(err){
+  // причина видна в заголовке: Cannot open: name — HTTP 404
+  picFail(baseName(name),(err&&err.message)||'');
+}
+}
+/* '~.png' / '~.gif' / '~' -> имя случайной картинки из pics/ */
+async function resolvePic(spec){
+ spec=String(spec||'').trim();
+ if(spec.charAt(0)!=='~')return spec;
+ const list=await fetchPics();
+ const ext=spec.slice(1).toLowerCase();        // '' | '.png' | '.gif'
+ const pool=(list.images||[]).filter(f=>!ext||f.toLowerCase().endsWith(ext));
+ if(!pool.length)throw new Error(ext?('no '+ext+' files in pics/'):'pics/ has no images');
+ return pool[Math.floor(Math.random()*pool.length)];
+}
+/* картинка, заданная в конфиге (в т.ч. случайная) */
+function initPicture(){
+ const spec=(CONFIG.picFile||'').trim();
+ if(!spec)return Promise.resolve();
+ return openFromPics(spec);
+}
+
+/* --- Picture Viewer: картинки и GIF -----------------------------------
+   Режим 'image' прячет <pre> и показывает <img>: GIF проигрывается
+   браузером сам, пропорции не искажаются (одинаковый коэффициент по
+   обеим сторонам), View → Zoom действует и на картинку. */
+function fitImageArt(){
+ const w=artImg.naturalWidth,h=artImg.naturalHeight;
+ if(!w||!h)return;
+ const cs=getComputedStyle(artWrap);
+ const padX=parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight)+parseFloat(cs.borderLeftWidth)+parseFloat(cs.borderRightWidth);
+ const padY=parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom)+parseFloat(cs.borderTopWidth)+parseFloat(cs.borderBottomWidth);
+ const availW=artStage.clientWidth-padX,availH=artStage.clientHeight-padY;
+ if(availW<=0||availH<=0)return;
+ const k=Math.min(availW/w,availH/h)*asciiZoom;   // contain-fit, без искажений
+ artImg.style.width=Math.max(1,w*k).toFixed(2)+'px';
+ artImg.style.height=Math.max(1,h*k).toFixed(2)+'px';
+}
+let artFileShown='';                    // имя последней реально показанной картинки
+function setArtFileName(name){
+ const el=document.querySelector('[data-art-file]');
+ if(el)el.textContent=name;
+ if(!/^(Cannot open:|Not an image:)/.test(name||''))artFileShown=name;
+}
+function defaultArtName(){
+ return (typeof CONFIG!=='undefined'&&CONFIG.artFile)?baseName(CONFIG.artFile):'Picture';
+}
+function freeArtBlob(){
+ if(artBlobUrl){URL.revokeObjectURL(artBlobUrl);artBlobUrl=null}
+}
+function showAsciiArt(){
+ artMode='ascii';
+ artImg.hidden=true;
+ artImg.removeAttribute('src');
+ artImg.style.width='';artImg.style.height='';artImg.style.transform='';
+ artWrap.style.maxWidth='';artWrap.style.overflow='';
+ freeArtBlob();
+ artPre.hidden=false;
+ setArtFileName(defaultArtName());
+ fitAscii();
+ autoSizeArt();
+}
+function showImage(src,name){
+ if(!src)return;
+ // сначала пробуем загрузить отдельным изображением: если адрес мёртвый,
+ // текущая картинка остаётся на месте, а диалог не закрывается
+ const probe=new Image();
+ probe.onload=()=>{
+  probe.onload=null;probe.onerror=null;
+  const img=artImg;
+  img.onload=()=>{
+   img.onload=null;img.onerror=null;
+   artMode='image';
+   artPre.hidden=true;
+   img.hidden=false;
+   // картинка может быть шире окна (View → Zoom) — не даём .art-wrap её обрезать
+   artWrap.style.maxWidth='none';
+   artWrap.style.overflow='visible';
+   setArtFileName(name||'image');
+   if(artWin&&!artWin.hidden)focusWindow(artWin); // окно поднимается наверх; закрытое не активируем
+   fitAscii();
+   autoSizeArt();        // окно под пропорции картинки (если его не тянули руками)
+   closeOpenDialog();
+  };
+  img.src=src;
+ };
+ probe.onerror=()=>{
+  probe.onload=null;probe.onerror=null;
+  picFail(name||src,'not found or not an image'); // диалог остаётся — можно исправить адрес
+ };
+ probe.src=src;
+}
+function openLocalFile(file){
+ if(!file)return false;
+ if(file.type&&!/^image\//.test(file.type)){
+  setArtFileName('Not an image: '+file.name);
+  return false;
+ }
+ freeArtBlob();
+ artBlobUrl=URL.createObjectURL(file);
+ showImage(artBlobUrl,file.name);
+ return true;
+}
+function nameFromUrl(url){
+ try{const u=new URL(url,location.href);return decodeURIComponent(u.pathname.split('/').pop())||u.hostname}
+ catch(e){return 'image'}
+}
+const artErr=document.getElementById('artErr');
+function setOpenError(msg){
+ if(!artErr)return;
+ if(!msg){artErr.hidden=true;artErr.textContent='';return}
+ artErr.textContent=msg;
+ artErr.hidden=false;
+}
+/* общий отказ: причина попадает и в заголовок окна, и в открытый диалог */
+function picFail(what,why){
+ const msg='Cannot open: '+what+(why?(' — '+why):'');
+ setArtFileName(msg);
+ setOpenError(msg);
+ console.warn('[picture viewer]',msg);
+}
+/* открыть картинку из pics/: имя ('cat.png') или маска ('~.jpg' / '~.gif' / '~') */
+function openFromPics(spec){
+ return resolvePic(spec)
+  .then(file=>{setOpenError('');showImage(picsUrl(file),baseName(file))})
+  .catch(err=>picFail(spec,(err&&err.message)||''));
+}
+function openOpenDialog(){
+ if(!openOverlay)return;
+ openOverlay.hidden=false;
+ openInput.value='';
+ setOpenError('');
+ openInput.focus();
+}
+function closeOpenDialog(){
+ if(openOverlay)openOverlay.hidden=true;
+ /* закрыли диалог после неудачной попытки (Esc/Cancel) — в заголовок
+    возвращается имя последней показанной картинки, а не текст ошибки */
+ const el=document.querySelector('[data-art-file]');
+ if(el&&/^Cannot open:/.test(el.textContent)&&artFileShown)el.textContent=artFileShown;
+}
+function openFromInput(){
+ const v=(openInput.value||'').trim();
+ if(!v)return;
+ // '~.jpg' / '~.gif' / '~' — случайная картинка из pics/, как в CONFIG.picFile
+ if(v.charAt(0)==='~')return openFromPics(v);
+ setOpenError('');
+ showImage(v,nameFromUrl(v));
+}
+
+const artOk=document.getElementById('artOpenOk');
+if(artOk)artOk.addEventListener('click',openFromInput);
+const artBrowse=document.getElementById('artBrowse');
+if(artBrowse)artBrowse.addEventListener('click',()=>fileInput.click());
+if(openInput)openInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();openFromInput()}});
+if(openInput)openInput.addEventListener('input',()=>setOpenError(''));
+if(openOverlay)openOverlay.addEventListener('click',e=>{if(e.target===openOverlay)closeOpenDialog()});
+if(fileInput)fileInput.addEventListener('change',()=>{
+ const f=fileInput.files&&fileInput.files[0];
+ fileInput.value='';
+ if(f){closeOpenDialog();openLocalFile(f)}
+});
+
+/* перетаскивание файла прямо на окно Picture Viewer */
+['dragover','dragenter'].forEach(t=>artWin.addEventListener(t,e=>{
+ const types=e.dataTransfer&&e.dataTransfer.types;
+ if(types&&Array.from(types).indexOf('Files')<0)return;
+ e.preventDefault();
+ artWin.classList.add('dropping');
+}));
+['dragleave','dragend'].forEach(t=>artWin.addEventListener(t,e=>{
+ if(t==='dragleave'&&e.relatedTarget&&artWin.contains(e.relatedTarget))return;
+ artWin.classList.remove('dropping');
+}));
+artWin.addEventListener('drop',e=>{
+ e.preventDefault();
+ artWin.classList.remove('dropping');
+ const dt=e.dataTransfer;if(!dt)return;
+ const files=Array.from(dt.files||[]);
+ if(files.length){
+  const file=files.find(f=>!f.type||/^image\//.test(f.type));
+  if(file)openLocalFile(file);
+  else setArtFileName('Not an image: '+files[0].name);   // просто сообщаем и ничего не ломаем
+  return;
+ }
+ const url=(dt.getData('text/uri-list')||dt.getData('text/plain')||'').split('\n')[0].trim();
+ if(/^(https?:|data:|blob:)/i.test(url))showImage(url,nameFromUrl(url));
+});
+
+const menuitems=[...document.querySelectorAll('.menuitem[data-menu]')];
+function closeMenus(except){menuitems.forEach(m=>{if(m!==except)m.classList.remove('open')})}
+menuitems.forEach(item=>{
+ item.addEventListener('click',event=>{
+  if(event.target.closest('.menu'))return;
+  event.stopPropagation();
+  const willOpen=!item.classList.contains('open');
+  closeMenus(item);
+  item.classList.toggle('open',willOpen);
+ });
+ item.addEventListener('mouseenter',()=>{
+  if(document.querySelector('.menuitem.open')){closeMenus(item);item.classList.add('open')}
+ });
+});
+document.addEventListener('click',()=>closeMenus());
+document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeMenus();closeHelp();closeOpenDialog();closeLayoutPalette()}});
+document.querySelectorAll('.menu button').forEach(btn=>btn.addEventListener('click',event=>{
+ event.stopPropagation();runAction(btn.dataset.action);closeMenus();
+}));
+document.querySelectorAll('.menuitem[data-action]').forEach(item=>item.addEventListener('click',event=>{
+ event.stopPropagation();runAction(item.dataset.action);
+}));
+
+function setZoom(value){asciiZoom=Math.min(4,Math.max(.25,value));fitAscii()}
+function openRoot(which){
+ const host=cleanHost(which==='lan'?lanInput.value:tailInput.value);
+ if(host)window.open('http://'+host,'_blank','noopener');
+}
+function copyLinks(){
+ const links=[...document.querySelectorAll('a[data-port]')].map(a=>a.href).filter(h=>h&&h!=='#'&&!h.endsWith('#'));
+ const text=links.join('\n');
+ if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text);
+}
+function toggleFullscreen(){
+ if(!document.fullscreenElement)document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen();
+ else document.exitFullscreen&&document.exitFullscreen();
+}
+function runAction(action){
+ switch(action){
+  case 'reload':location.reload();break;
+  case 'copy-links':copyLinks();break;
+  case 'exit':window.close();break;
+  case 'open-image':openOpenDialog();break;
+  case 'back-ascii':showAsciiArt();break;
+  case 'audio':showWindow(document.getElementById('winMusic'),true);break;
+  case 'zoom-in':setZoom(asciiZoom*1.15);break;
+  case 'zoom-out':setZoom(asciiZoom/1.15);break;
+  case 'zoom-reset':setZoom(1);break;
+  case 'toggle-services':{
+   const services=document.querySelector('.services');
+   const title=document.querySelector('.group-title');
+   services.hidden=!services.hidden;
+   if(title)title.hidden=services.hidden;
+   layoutWindows();
+   break;
+  }
+  case 'toggle-fullscreen':toggleFullscreen();break;
+  case 'layout':openLayoutPalette();break;
+  case 'layout-save':saveLayoutNow(true);break;
+  case 'layout-reset':resetLayout();break;
+  case 'theme':toggleTheme();break;
+  case 'open-lan':openRoot('lan');break;
+  case 'open-tail':openRoot('tail');break;
+  case 'favorite':window.open(CONFIG.favoriteUrl,'_blank','noopener');break;
+  case 'help':openHelp();break;
+ }
+}
+
+const helpOverlay=document.querySelector('#helpOverlay');
+const helpWindow=document.querySelector('#helpWindow');
+function centerHelp(){helpWindow.style.position='';helpWindow.style.left='';helpWindow.style.top='';helpWindow.style.margin='';helpWindow.style.transform=''}
+function openHelp(){centerHelp();helpOverlay.hidden=false}
+function closeHelp(){helpOverlay.hidden=true}
+document.querySelectorAll('[data-close]').forEach(el=>el.addEventListener('click',()=>{
+ const target=document.getElementById(el.dataset.close);
+ if(target)target.hidden=true;
+}));
+helpOverlay.addEventListener('click',event=>{if(event.target===helpOverlay)closeHelp()});
+
+(function enableHelpDrag(){
+ let dragging=false,offsetX=0,offsetY=0;
+ helpWindow.addEventListener('pointerdown',event=>{
+  const bar=event.target.closest('[data-drag-window]');
+  if(!bar||event.target.closest('.window-controls'))return;
+  const rect=helpWindow.getBoundingClientRect();
+  dragging=true;offsetX=event.clientX-rect.left;offsetY=event.clientY-rect.top;
+  helpWindow.style.position='fixed';helpWindow.style.margin='0';
+  helpWindow.style.left=rect.left+'px';helpWindow.style.top=rect.top+'px';helpWindow.style.transform='none';
+ });
+ window.addEventListener('pointermove',event=>{
+  if(!dragging)return;
+  helpWindow.style.left=Math.max(0,event.clientX-offsetX)+'px';
+  helpWindow.style.top=Math.max(0,event.clientY-offsetY)+'px';
+ });
+ window.addEventListener('pointerup',()=>{dragging=false});
+})();
+
+const scene=document.querySelector('#scene');
+const appWindows=[...document.querySelectorAll('.appwindow')];
+const taskButtons=[...document.querySelectorAll('.task')];
+let zCounter=10,dragState=null,resizeState=null;
+/* --- конструктор раскладки (View → Layout constructor…) -----------------
+   Окна можно перетаскивать и раскладывать как угодно, а потом сохранить:
+   раскладка лежит на сервере (POST /api/layout -> layout.json) и одинакова
+   для всех устройств. Переменные объявлены здесь (а не рядом с функциями),
+   потому что showWindow/initMusic зовутся во время разбора скрипта. */
+let layoutReady=false;        // init закончен — можно сохранять изменения
+let layoutApplying=false;     // применяем сохранённое — сохранять не надо
+let savedLayout=null;         // последняя раскладка (для пересчёта при resize)
+let layoutSaveTimer=null,flashTimer=null;
+const LAYOUT_KEY='nerevar-hub.layout';   // зеркало раскладки в localStorage
+const layoutPaletteEl=document.getElementById('layoutPalette'); // до initMusic!
+let paletteDrag=null;
+
+function taskFor(win){return taskButtons.find(b=>b.dataset.window===win.id)}
+function focusWindow(win){
+ appWindows.forEach(w=>{if(w!==win)w.classList.remove('active')});
+ taskButtons.forEach(b=>b.classList.remove('active'));
+ win.classList.add('active');
+ win.style.zIndex=++zCounter;
+ const btn=taskFor(win);if(btn)btn.classList.add('active');
+}
+function showWindow(win,show){
+ win.hidden=!show;
+ if(show){focusWindow(win);fitAscii();
+  if(win.dataset.autoplace==='1')placeMonitor();
+  if(win.id==='winMusic')placeMusic();}
+ else{const btn=taskFor(win);if(btn)btn.classList.remove('active');}
+ scheduleLayoutSave();syncLayoutPalette();   // открыли/закрыли окно — запоминаем
+}
+function clampWindow(win){
+ const sw=scene.clientWidth,sh=scene.clientHeight;
+ let left=parseFloat(win.style.left),top=parseFloat(win.style.top);
+ let w=win.offsetWidth,h=win.offsetHeight;
+ w=Math.min(w,sw);h=Math.min(h,sh);
+ left=Math.min(Math.max(isNaN(left)?0:left,0),Math.max(0,sw-60));
+ top=Math.min(Math.max(isNaN(top)?0:top,0),Math.max(0,sh-24));
+ win.style.left=left+'px';win.style.top=top+'px';
+ win.style.width=w+'px';win.style.height=h+'px';
+}
+
+appWindows.forEach(win=>{
+    win.addEventListener('pointerdown',event=>{
+    if(event.target.closest('.resize-grip'))return;
+    if(!win.hidden)focusWindow(win);
+   },true);
+    const bar=win.querySelector('.titlebar');
+   bar.addEventListener('pointerdown',event=>{
+    if(event.button!==0||event.target.closest('.window-controls')||event.target.closest('.resize-grip'))return;
+    resizeState=null;
+    win.dataset.manual='1';         // ручное положение не трогают авто-расстановки
+    const rect=win.getBoundingClientRect(),sr=scene.getBoundingClientRect();
+    const left=rect.left-sr.left,top=rect.top-sr.top;
+    win.style.width=rect.width+'px';win.style.height=rect.height+'px';
+    win.style.right='auto';win.style.bottom='auto';
+    win.style.left=left+'px';win.style.top=top+'px';
+    dragState={win,offX:event.clientX-left,offY:event.clientY-top};
+    try{bar.setPointerCapture(event.pointerId)}catch(e){}
+    event.preventDefault();
+   });
+   const grip=win.querySelector('.resize-grip');
+   if(grip)grip.addEventListener('pointerdown',event=>{
+    if(event.button!==0)return;
+    dragState=null;
+    const rect=win.getBoundingClientRect(),sr=scene.getBoundingClientRect();
+    const left=rect.left-sr.left,top=rect.top-sr.top;
+    win.style.width=rect.width+'px';win.style.height=rect.height+'px';
+    win.style.right='auto';win.style.bottom='auto';
+    win.style.left=left+'px';win.style.top=top+'px';
+const cs=getComputedStyle(win);
+   resizeState={win,startX:event.clientX,startY:event.clientY,startW:rect.width,startH:rect.height,
+    minW:parseFloat(cs.minWidth)||260,minH:parseFloat(cs.minHeight)||160};
+   win.dataset.manual='1';
+   try{grip.setPointerCapture(event.pointerId)}catch(e){}
+    event.preventDefault();
+    event.stopPropagation();
+   });
+   });
+
+window.addEventListener('pointermove',event=>{
+ if(dragState){
+  const sw=scene.clientWidth,sh=scene.clientHeight,win=dragState.win;
+  let left=event.clientX-dragState.offX,top=event.clientY-dragState.offY;
+  left=Math.min(Math.max(left,-(win.offsetWidth-40)),sw-40);
+  top=Math.min(Math.max(top,0),sh-24);
+  win.style.left=left+'px';win.style.top=top+'px';
+ }
+if(resizeState){
+   const sw=scene.clientWidth,sh=scene.clientHeight,win=resizeState.win;
+   const left=parseFloat(win.style.left)||0,top=parseFloat(win.style.top)||0;
+   const w=Math.min(Math.max(resizeState.minW,resizeState.startW+(event.clientX-resizeState.startX)),sw-left);
+   const h=Math.min(Math.max(resizeState.minH,resizeState.startH+(event.clientY-resizeState.startY)),sh-top);
+   win.style.width=w+'px';win.style.height=h+'px';
+  }
+});
+function endGesture(){
+ const moved=dragState||resizeState;      // было перемещение/изменение размера?
+ dragState=null;resizeState=null;
+ if(moved){scheduleLayoutSave();syncLayoutPalette();}
+}
+window.addEventListener('pointerup',endGesture);
+window.addEventListener('pointercancel',endGesture);
+window.addEventListener('blur',endGesture);
+
+document.querySelectorAll('[data-win-close]').forEach(el=>el.addEventListener('click',event=>{
+ event.stopPropagation();
+ const win=document.getElementById(el.dataset.winClose);if(win)showWindow(win,false);
+}));
+document.querySelectorAll('[data-win-min]').forEach(el=>el.addEventListener('click',event=>{
+ event.stopPropagation();
+ const win=document.getElementById(el.dataset.winMin);if(win)showWindow(win,false);
+}));
+document.querySelectorAll('[data-win-max]').forEach(el=>el.addEventListener('click',event=>{
+ event.stopPropagation();
+ const win=document.getElementById(el.dataset.winMax);if(!win)return;
+ setMaximized(win,win.dataset.maximized!=='1');
+ scheduleLayoutSave();syncLayoutPalette();
+}));
+
+taskButtons.forEach(btn=>btn.addEventListener('click',()=>{
+ const win=document.getElementById(btn.dataset.window);if(!win)return;
+ if(win.hidden)showWindow(win,true);
+ else if(btn.classList.contains('active'))showWindow(win,false);
+ else focusWindow(win);
+}));
+
+window.addEventListener('resize',()=>{layoutWindows(true);fitAscii()});
+function tick(){
+  const el=document.getElementById('clock');if(!el)return;
+  const now=new Date();
+  const d=el.querySelector('[data-clock-date]'),t=el.querySelector('[data-clock-time]');
+  // формат: День недели в 2 символа / Мес / Д / Г  ->  Mo/Nov/2/2026
+  if(d)d.textContent=now.toLocaleDateString('en-US',{weekday:'short'}).slice(0,2)+'/'
+    +now.toLocaleDateString('en-US',{month:'short'})+'/'
+    +now.getDate()+'/'+now.getFullYear();
+  if(t)t.textContent=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+}
+tick();setInterval(tick,10000);
+
+/* --- Календарь: клик по часам в таскбаре ----------------------------- */
+const CAL_MONTHS=['January','February','March','April','May','June','July',
+                  'August','September','October','November','December'];
+const CAL_WD_SHORT=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const CAL_MO_SHORT=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const calPop=document.getElementById('calPop');
+const calClock=document.getElementById('clock');
+let calView=new Date();          // первый день показываемого месяца
+calView.setDate(1);
+let calSelected=null;            // выбранная дата (или null)
+
+function calSameDay(a,b){
+  return !!a&&!!b&&a.getFullYear()===b.getFullYear()&&
+         a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();
+}
+function calLongDate(d){
+  return CAL_WD_SHORT[d.getDay()]+', '+CAL_MO_SHORT[d.getMonth()]+' '+
+         d.getDate()+', '+d.getFullYear();
+}
+function renderCalendar(){
+  if(!calPop)return;
+  const y=calView.getFullYear(),m=calView.getMonth();
+  const label=calPop.querySelector('[data-cal-label]');
+  if(label)label.textContent=CAL_MONTHS[m]+' '+y;
+
+  const pad=new Date(y,m,1).getDay();            // 0 = Sunday
+  const daysInMonth=new Date(y,m+1,0).getDate();
+  const prevDays=new Date(y,m,0).getDate();
+  const today=new Date();
+  const cells=[];
+  for(let i=0;i<42;i++){                          // всегда 6 строк — высота не прыгает
+    const day=i-pad+1;
+    let date,cls='';
+    if(day<1){date=new Date(y,m-1,prevDays+day);cls='muted'}
+    else if(day>daysInMonth){date=new Date(y,m+1,day-daysInMonth);cls='muted'}
+    else date=new Date(y,m,day);
+    if(calSameDay(date,today))cls+=(cls?' ':'')+'today';
+    if(calSameDay(date,calSelected))cls+=(cls?' ':'')+'sel';
+    cells.push('<td class="'+cls+'" data-cal-date="'+date.getTime()+'">'+date.getDate()+'</td>');
+  }
+  let html='';
+  for(let i=0;i<42;i+=7)html+='<tr>'+cells.slice(i,i+7).join('')+'</tr>';
+  const body=calPop.querySelector('[data-cal-body]');
+  if(body)body.innerHTML=html;
+
+  const out=calPop.querySelector('[data-cal-long]');
+  if(out)out.textContent=calLongDate(calSelected||today);
+}
+function openCal(){
+  calView=new Date();calView.setDate(1);   // при открытии — всегда текущий месяц
+  calPop.hidden=false;
+  calClock.classList.add('on');
+  renderCalendar();
+}
+function closeCal(){
+  calPop.hidden=true;
+  calClock.classList.remove('on');
+}
+function toggleCal(){calPop.hidden?openCal():closeCal()}
+calClock.addEventListener('click',event=>{
+  event.stopPropagation();
+  closeMenus();                 // календарь и меню одновременно не держим
+  toggleCal();
+});
+calPop.addEventListener('click',event=>event.stopPropagation());  // клик внутри не закрывает
+calPop.querySelectorAll('[data-cal]').forEach(btn=>btn.addEventListener('click',event=>{
+  event.stopPropagation();
+  calView=new Date(calView.getFullYear(),calView.getMonth()+(btn.dataset.cal==='next'?1:-1),1);
+  renderCalendar();
+}));
+calPop.addEventListener('click',event=>{
+  const cell=event.target.closest('td[data-cal-date]');
+  if(!cell)return;
+  const d=new Date(Number(cell.dataset.calDate));
+  if(!calSameDay(d,calView))calView=new Date(d.getFullYear(),d.getMonth(),1);
+  calSelected=d;
+  renderCalendar();
+});
+const calTodayBtn=calPop.querySelector('[data-cal-today]');
+if(calTodayBtn)calTodayBtn.addEventListener('click',event=>{
+  event.stopPropagation();
+  calView=new Date();calView.setDate(1);
+  calSelected=new Date();
+  renderCalendar();
+});
+document.addEventListener('click',()=>{if(calPop&&!calPop.hidden)closeCal()});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape'&&calPop&&!calPop.hidden)closeCal();
+});
+
+function measureArtRef(){
+  const REF=100,prev=artPre.style.fontSize;
+  artPre.style.fontSize=REF+'px';
+  const w=artPre.scrollWidth||1,h=artPre.scrollHeight||1;
+  artPre.style.fontSize=prev;
+  return {w:w,h:h};
+}
+function artAspect(){
+  if(artMode==='image'){
+    const w=artImg.naturalWidth,h=artImg.naturalHeight;
+    if(w>0&&h>0)return w/h;
+  }
+  const m=measureArtRef();
+  return m.w/m.h;
+}
+function autoSizeArt(force){
+  const sw=scene.clientWidth,sh=scene.clientHeight,m=10;
+  const servers=document.getElementById('winServers'),art=document.getElementById('winArt');
+  if(art.dataset.manual==='1'&&!force)return;
+  const sW=servers.hidden?0:servers.offsetWidth;
+  const stack=sw<760||(sw-2*m-sW-m)<320;
+  let availW,availH,left,top;
+  if(stack){
+   availW=sw-2*m;
+   top=servers.hidden?m:servers.offsetHeight+m;
+   availH=sh-top-m;
+   left=m;
+  }else{
+   availW=Math.max(260,sw-2*m-sW-m);
+   availH=Math.max(190,sh-2*m);
+   left=m;top=m;
+  }
+  availW=Math.max(260,availW);availH=Math.max(150,availH);
+  const aspect=artAspect();
+  let h=Math.min(availH,460);
+  let w=Math.min(availW,h*aspect);
+  if(w<320){w=Math.min(availW,320);h=Math.min(availH,w/aspect);}
+  w=Math.max(260,Math.round(w));h=Math.max(160,Math.round(h));
+  art.style.width=w+'px';art.style.height=h+'px';
+  art.style.left=(stack?left:sw-w-m)+'px';
+  art.style.top=(stack?top:sh-h-m)+'px';
+  art.style.right='auto';art.style.bottom='auto';
+  art.dataset.maximized='0';
+}
+/* --- System Monitor: подбор свободного места --------------------------- */
+function rectInScene(win){
+  const sr=scene.getBoundingClientRect(),r=win.getBoundingClientRect();
+  return {x:r.left-sr.left,y:r.top-sr.top,w:r.width,h:r.height};
+}
+function overlapArea(a,b){
+  const ox=Math.max(0,Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x));
+  const oy=Math.max(0,Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y));
+  return ox*oy;
+}
+function placeMonitor(){
+  const mon=document.getElementById('winMonitor');
+  if(!mon||mon.hidden)return;
+  if(mon.dataset.maximized==='1')return;
+  const cfg=CONFIG.monitor||{};
+  const sw=scene.clientWidth,sh=scene.clientHeight,m=10;
+
+  // Ручную позицию уважаем: подвинем окно внутрь сцены только если оно вылезло.
+  if(mon.dataset.manual==='1'){
+    const r=rectInScene(mon);
+    const w=Math.min(r.w,sw-2*m),h=Math.min(r.h,sh-2*m);
+    const x=Math.min(Math.max(r.x,m),Math.max(m,sw-w-m));
+    const y=Math.min(Math.max(r.y,m),Math.max(m,sh-h-m));
+    if(w!==Math.round(r.w))mon.style.width=Math.round(w)+'px';
+    if(h!==Math.round(r.h))mon.style.height=Math.round(h)+'px';
+    mon.style.left=Math.round(x)+'px';
+    mon.style.top=Math.round(y)+'px';
+    mon.style.right='auto';mon.style.bottom='auto';
+    return;
+  }
+
+  const servers=document.getElementById('winServers'),art=document.getElementById('winArt');
+  const taken=[];
+  if(!servers.hidden)taken.push(rectInScene(servers));
+  if(!art.hidden)taken.push(rectInScene(art));
+  const sR=taken[0]?taken[0].x+taken[0].w:m;      // правая кромка серверного окна
+  const sB=taken[0]?taken[0].y+taken[0].h:m;      // низ серверного окна
+  const aT=taken[1]?taken[1].y:sh-m;              // верх окна с артом
+  const aL=taken[1]?taken[1].x:sw-m;              // левая кромка окна с артом
+
+  const maxW=Math.max(160,sw-2*m),maxH=Math.max(130,sh-2*m);
+  const hardW=Math.min(maxW,180),hardH=Math.min(maxH,150);   // предел ужатия
+  const wantW=Math.min(maxW,Math.max(hardW,Number(cfg.width)||360));
+  const wantH=Math.min(maxH,Math.max(hardH,Number(cfg.height)||225));
+  const PAD=6;
+
+  const anchors=()=>[
+    {x:m,y:sB+m},            // под серверным окном, слева
+    {x:sR+m,y:m},            // справа от серверного окна
+    {x:sR+m,y:sB+m},         // справа и ниже серверного окна
+    {x:aL-wantW-m,y:aT-wantH-m}, // сразу над окном арта
+    {x:m,y:sh-wantH-m},      // левый нижний угол
+    {x:sw-wantW-m,y:m},      // правый верхний угол
+    {x:sw-wantW-m,y:sh-wantH-m}  // правый нижний угол
+  ];
+
+  // Насколько можно развернуться из точки (x,y), не трогая чужие окна.
+  function fitAt(x,y){
+    if(x<m-.5||y<m-.5)return null;
+    for(const r of taken){
+      if(x>=r.x-PAD&&x<r.x+r.w+PAD&&y>=r.y-PAD&&y<r.y+r.h+PAD)return null;
+    }
+    let wLim=sw-m-x;
+    for(const r of taken){
+      if(r.y+PAD>=y+hardH||r.y+r.h-PAD<=y)continue;   // по вертикали не мешает
+      if(r.x+r.w<=x+PAD)continue;                     // целиком слева
+      wLim=Math.min(wLim,r.x-PAD-x);
+    }
+    if(wLim<hardW)return null;
+    const w=Math.min(wantW,wLim);
+    let hLim=sh-m-y;
+    for(const r of taken){
+      if(r.x+PAD>=x+w||r.x+r.w-PAD<=x)continue;       // по горизонтали не мешает
+      if(r.y+r.h<=y+PAD)continue;                     // целиком выше
+      hLim=Math.min(hLim,r.y-PAD-y);
+    }
+    if(hLim<hardH)return null;
+    const h=Math.min(wantH,hLim);
+    return {x:Math.round(x),y:Math.round(y),w:Math.round(w),h:Math.round(h),
+            avail:Math.round(hLim)};
+  }
+
+  function overlapAreaOf(a){
+    return taken.reduce((sum,r)=>sum+overlapArea(a,r),0);
+  }
+
+  // Сколько места нужно контенту (диски, RAID) при желаемой ширине —
+  // меряем заранее, чтобы выбрать не просто первый свободный якорь,
+  // а тот, куда контент влезет целиком, без прокрутки.
+  const body=mon.querySelector('.monitor-body');
+  if(body)body.classList.toggle('compact',wantW<300);
+  mon.style.width=wantW+'px';
+  mon.style.height='auto';
+  const needH=Math.min(maxH,Math.max(wantH,mon.offsetHeight||0));
+
+  let spot=null,tight=null;
+  for(const a of anchors()){
+    const r=fitAt(a.x,a.y);
+    if(!r)continue;
+    if(!tight)tight=r;
+    if(r.avail>=needH){spot=r;break}
+  }
+  if(!spot)spot=tight;
+
+  // Свободного места нет (маленький экран) — встаём туда, где меньше всего
+  // перекрытий. Окно ведь обычное: его можно перетащить за заголовок.
+  if(!spot){
+    let best=null,bestScore=Infinity;
+    for(const a of anchors()){
+      for(const size of [{w:wantW,h:wantH},{w:hardW,h:hardH}]){
+        const r={x:Math.round(a.x),y:Math.round(a.y),w:Math.round(size.w),h:Math.round(size.h)};
+        if(r.x<m-.5||r.y<m-.5||r.x+r.w>sw-m+.5||r.y+r.h>sh-m+.5)continue;
+        const score=overlapAreaOf(r);
+        if(score<bestScore){bestScore=score;best=r;}
+      }
+    }
+    spot=best||{x:m,y:Math.max(m,sh-hardH-m),w:hardW,h:hardH};
+  }
+
+  if(spot.avail==null)spot.avail=Math.max(hardH,sh-m-spot.y);
+
+  if(body)body.classList.toggle('compact',spot.w<300);
+
+  mon.style.left=spot.x+'px';
+  mon.style.top=spot.y+'px';
+  mon.style.width=spot.w+'px';
+  mon.style.right='auto';
+  mon.style.bottom='auto';
+
+  // Высота — под содержимое (диски, RAID): меряем natural, но не ниже
+  // желаемой из CONFIG и не дальше свободного места до соседа/края сцены.
+  mon.style.height='auto';
+  const natural=mon.offsetHeight||0;
+  const h=Math.min(Math.max(natural,wantH),Math.max(hardH,spot.avail));
+  mon.style.height=Math.round(h)+'px';
+}
+/* --- Audio Player ------------------------------------------------------ */
+function musicCfg(){return CONFIG.music||{}}
+function musicUrl(name){
+ const base=String(musicCfg().base||'music/').replace(/\/?$/,'/');
+ return base+String(name).split('/').map(encodeURIComponent).join('/');
+}
+function musicName(name){return String(name||'').split('/').pop()}
+function fmtTime(sec){
+ if(!isFinite(sec)||sec<0)return '0:00';
+ const m=Math.floor(sec/60),s=Math.floor(sec%60);
+ return m+':'+(s<10?'0':'')+s;
+}
+const audioEl=document.getElementById('musicAudio');
+const musicWin=document.getElementById('winMusic');
+const musicListEl=document.querySelector('[data-music-list]');
+const musicStatusEl=document.querySelector('[data-music-status]');
+const musicSeekEl=document.querySelector('[data-music-seek]');
+const musicSeekFill=document.querySelector('[data-music-seek-fill]');
+const musicVolEl=document.querySelector('[data-music-vol]');
+let musicTracks=[],musicIndex=-1,musicShuffle=false,musicLoop='all';
+
+function setMusicStatus(text){if(musicStatusEl)musicStatusEl.textContent=text}
+function musicMarkPlaying(){
+ if(!musicListEl)return;
+ for(let i=0;i<musicListEl.children.length;i++)
+  musicListEl.children[i].classList.toggle('playing',i===musicIndex);
+}
+function musicTrackTitle(){
+ const el=document.querySelector('[data-music-track]');
+ if(!el)return;
+ el.textContent=(musicIndex>=0&&musicTracks[musicIndex])?musicName(musicTracks[musicIndex]):'No track';
+}
+function musicSyncButtons(){
+ const play=document.querySelector('[data-music="play"]');
+ if(play)play.innerHTML=audioEl.paused?'&#9654;':'&#9612;&#9612;';
+ const sh=document.querySelector('[data-music="shuffle"]');
+ if(sh)sh.classList.toggle('on',musicShuffle);
+ const lp=document.querySelector('[data-music="loop"]');
+ if(lp){
+  lp.classList.toggle('on',musicLoop!=='off');
+  lp.textContent=musicLoop==='one'?'R1':'R';
+ }
+ if(skinActive)skinRender();
+}
+function renderMusicList(){
+ if(!musicListEl)return;
+ musicListEl.innerHTML='';
+ musicTracks.forEach(function(name,i){
+  const b=document.createElement('button');
+  b.type='button';
+  b.className='music-item';
+  b.textContent=musicName(name);
+  b.title=name;
+  b.dataset.i=String(i);
+  b.addEventListener('click',function(){musicPlay(i)});
+  musicListEl.appendChild(b);
+ });
+ musicMarkPlaying();
+ if(!musicTracks.length)setMusicStatus('No tracks in '+String(musicCfg().base||'music/'));
+ else setMusicStatus(musicTracks.length+(musicTracks.length===1?' track':' tracks'));
+ if(skinActive)skinRenderPlaylist();
+}
+function musicPlay(i){
+ if(!musicTracks.length){setMusicStatus('No tracks in '+String(musicCfg().base||'music/'));return}
+ if(i!=null)musicIndex=((i%musicTracks.length)+musicTracks.length)%musicTracks.length;
+ if(musicIndex<0)musicIndex=0;
+ audioEl.src=musicUrl(musicTracks[musicIndex]);
+ musicTrackTitle();
+ musicMarkPlaying();
+ if(skinActive){skinRender();skinRenderPlaylist();}
+ const p=audioEl.play();
+ if(p&&p.catch)p.catch(function(){
+  if(audioEl.error)return; /* причину уже сообщил обработчик error */
+  setMusicStatus('Press play to start');
+ });
+}
+function musicToggle(){
+ if(!audioEl.getAttribute('src')){musicPlay(0);return}
+ if(audioEl.paused){const p=audioEl.play();if(p&&p.catch)p.catch(function(){})}
+ else audioEl.pause();
+}
+function musicNext(auto){
+ if(!musicTracks.length)return;
+ if(musicShuffle&&musicTracks.length>1){
+  let n=musicIndex;
+  while(n===musicIndex)n=Math.floor(Math.random()*musicTracks.length);
+  musicPlay(n);
+  return;
+ }
+ if(auto&&musicIndex>=musicTracks.length-1&&musicLoop==='off'){audioEl.pause();return}
+ musicPlay(musicIndex+1);
+}
+function musicPrev(){
+ if(!musicTracks.length)return;
+ if(audioEl.currentTime>3){audioEl.currentTime=0;return}
+ musicPlay(musicIndex-1);
+}
+if(audioEl){
+ audioEl.addEventListener('play',musicSyncButtons);
+ audioEl.addEventListener('pause',musicSyncButtons);
+ audioEl.addEventListener('loadedmetadata',function(){
+  const d=document.querySelector('[data-music-dur]');
+  if(d)d.textContent=fmtTime(audioEl.duration);
+  if(skinActive)skinRender();
+ });
+ audioEl.addEventListener('timeupdate',function(){
+  const cur=document.querySelector('[data-music-cur]');
+  if(cur)cur.textContent=fmtTime(audioEl.currentTime);
+  const d=audioEl.duration;
+  if(musicSeekFill)musicSeekFill.style.width=(isFinite(d)&&d>0?(audioEl.currentTime/d*100):0)+'%';
+  if(skinActive)skinRender();
+ });
+ audioEl.addEventListener('ended',function(){
+  if(musicLoop==='one'){audioEl.currentTime=0;const p=audioEl.play();if(p&&p.catch)p.catch(function(){});return}
+  musicNext(true);
+ });
+ audioEl.addEventListener('error',function(){
+  if(!audioEl.getAttribute('src'))return;
+  setMusicStatus('Cannot play: '+musicName(musicTracks[musicIndex]||'')+' — unsupported or damaged audio file');
+ });
+}
+if(musicSeekEl)musicSeekEl.addEventListener('click',function(event){
+ const d=audioEl.duration;
+ if(!isFinite(d)||d<=0)return;
+ const r=musicSeekEl.getBoundingClientRect();
+ const ratio=Math.min(1,Math.max(0,(event.clientX-r.left)/r.width));
+ audioEl.currentTime=ratio*d;
+});
+if(musicVolEl)musicVolEl.addEventListener('input',function(){
+ audioEl.volume=Math.max(0,Math.min(1,Number(musicVolEl.value)/100));
+ if(skinActive)skinRender();
+});
+document.querySelectorAll('[data-music]').forEach(function(btn){
+ btn.addEventListener('click',function(){
+  switch(btn.dataset.music){
+   case 'play':musicToggle();break;
+   case 'stop':audioEl.pause();audioEl.currentTime=0;break;
+   case 'next':musicNext(false);break;
+   case 'prev':musicPrev();break;
+   case 'shuffle':musicShuffle=!musicShuffle;musicSyncButtons();break;
+   case 'loop':musicLoop=musicLoop==='all'?'one':(musicLoop==='one'?'off':'all');musicSyncButtons();break;
+  }
+ });
+});
+function loadMusic(){
+ const cfg=musicCfg();
+ const manual=Array.isArray(cfg.tracks)?cfg.tracks.filter(Boolean):[];
+ if(manual.length){musicTracks=manual.slice();renderMusicList();return Promise.resolve()}
+ if(!cfg.list){musicTracks=[];renderMusicList();return Promise.resolve()}
+ return fetch(cfg.list,{cache:'no-store'})
+  .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
+  .then(function(j){musicTracks=Array.isArray(j&&j.tracks)?j.tracks:[];renderMusicList()})
+  .catch(function(err){musicTracks=[];renderMusicList();setMusicStatus('Playlist unavailable');console.warn('[audio]',err)});
+}
+/* окно плеера по умолчанию встаёт по центру сцены и там же остаётся
+   при изменении размера — пока его не потянули руками */
+function placeMusic(){
+ if(!musicWin||musicWin.hidden)return;
+ if(musicWin.dataset.maximized==='1')return;
+ const skinHostEl=document.querySelector('[data-skin-host]');
+ if(skinHostEl&&skinHostEl.classList.contains('on')){skinFitWindow();return}
+ const sw=scene.clientWidth,sh=scene.clientHeight,m=10,cfg=musicCfg();
+ if(musicWin.dataset.placed!=='1'){
+  musicWin.dataset.placed='1';
+  const w=Math.min(Math.max(250,Number(cfg.width)||300),Math.max(250,sw-2*m));
+  const h=Math.min(Math.max(210,Number(cfg.height)||300),Math.max(210,sh-2*m));
+  musicWin.style.width=w+'px';
+  musicWin.style.height=h+'px';
+  musicWin.style.left=Math.round((sw-w)/2)+'px';
+  musicWin.style.top=Math.round((sh-h)/2)+'px';
+  musicWin.style.right='auto';
+  musicWin.style.bottom='auto';
+  return;
+ }
+ if(musicWin.dataset.manual==='1'){clampWindow(musicWin);return}
+ const w=musicWin.offsetWidth,h=musicWin.offsetHeight;
+ musicWin.style.left=Math.round(Math.max(m,(sw-w)/2))+'px';
+ musicWin.style.top=Math.round(Math.max(m,(sh-h)/2))+'px';
+}
+/* ======================================================================= *
+ *  Скины плеера: Qmmp / Winamp 2  (.wsz = ZIP c BMP-файлами внутри)
+ *
+ *  Скин рисуется на двух <canvas>: главное окно Winamp (275x116) и
+ *  плейлист под ним. Порядок работы:
+ *    skinUnzip()   — ZIP разбирается прямо в браузере, сервер не участвует;
+ *    skinBmp()     — BMP (8/24/32 bpp) превращается в canvas;
+ *    skinParse()   — собирает картинки + цвета из pledit.txt;
+ *    skinRender()  — рисует окно по координатам Winamp 2.
+ *  Координаты одинаковы у всех скинов: их задаёт формат Winamp 2,
+ *  его же использует Qmmp, так что любой .wsz ложится на них как влитой.
+ * ======================================================================= */
+let skinActive=false,skin=null,skinName='';
+let skinPress=null,skinDrag=null,skinScroll=0,skinSel=-1,skinPlOn=true;
+let skinHost=null,skinCvMain=null,skinCvPl=null;
+const skinDisk={};      // скины, загруженные кнопкой «Skin…» (значение «~имя»)
+const SKIN_W=275,SKIN_H=116;                 // размер главного окна Winamp
+/* --- размещение элементов на главном окне ------------------------------ */
+const SKIN_TITLEBAR={on:[27,0],off:[27,15]}; // два состояния в titlebar.bmp
+const SKIN_TITLEBTNS=[                        // [id, x] на титульной полосе
+ {id:'menu',x:6,src:[[0,0],[0,9]]},
+ {id:'min',x:244,src:[[9,0],[9,9]]},
+ {id:'shade',x:254,src:[[0,18],[9,18]]},
+ {id:'close',x:264,src:[[18,0],[18,9]]}
+];
+const SKIN_DIGITS=[[48,26],[60,26],[78,26],[90,26]];  // 4 разряда времени
+const SKIN_MARQUEE=[111,27,154,6];                    // бегущая строка
+const SKIN_PLAYPAUS=[26,28];                          // индикатор 9x9
+const SKIN_MONO=[212,41,27,12],SKIN_STEREO=[239,41,29,12];
+const SKIN_VOL=[107,57];        // поле 68x13, бегунок ездит по 65 px
+const SKIN_BAL=[177,57];        // поле 38x13, бегунок 14 px по центру
+const SKIN_POS=[16,72];         // поле 248x10, бегунок 29 px
+const SKIN_EQ=[219,58],SKIN_PL=[242,58];
+/* [id, x, y, w, h на окне; sx, sy; sy нажатой — в cbuttons.bmp] */
+const SKIN_BTNS=[
+ ['prev',16,88,23,18,0,0,18],
+ ['play',39,88,23,18,23,0,18],
+ ['pause',62,88,23,18,46,0,18],
+ ['stop',85,88,23,18,69,0,18],
+ ['next',108,88,22,18,92,0,18],
+ ['eject',136,89,22,16,114,0,16]
+];
+/* [id, x, y, w, h на окне; sx, sy в shufrep.bmp] */
+const SKIN_SHUF=[['shuffle',164,89,47,15,28,0],['repeat',210,89,28,15,0,0]];
+/* строки shufrep.bmp: 0 — выкл, 1 — нажато, 2 — вкл, 3 — вкл и нажато */
+const SKIN_ROWH=13,SKIN_PLTOP=20,SKIN_PLBOT=38;      // геометрия плейлиста
+
+/* шрифт Winamp: text.bmp — 31x3 глифа по 5x6 пикселей */
+const SKIN_FONT=(function(){
+ const m={};
+ for(let i=0;i<26;i++)m[String.fromCharCode(97+i)]=[0,i];
+ m['"']=[0,26];m['@']=[0,27];m[' ']=[0,30];
+ for(let i=0;i<10;i++)m[String(i)]=[1,i];
+ m['\u2026']=[1,10];
+ const r1=".:()-'!_+\\/[]^&%,=$#";
+ for(let i=0;i<r1.length;i++)m[r1[i]]=[1,11+i];
+ m['\u00e5']=[2,0];m['\u00f6']=[2,1];m['\u00e4']=[2,2];
+ m['?']=[2,3];m['*']=[2,4];
+ m['<']=[1,22];m['>']=[1,23];m['{']=[1,22];m['}']=[1,23];
+ return m;
+})();
+
+/* --- ZIP: разбираем .wsz целиком в браузере --------------------------- */
+async function skinUnzip(buf){
+ const u8=new Uint8Array(buf),dv=new DataView(buf);
+ let e=-1;
+ const from=Math.max(0,u8.length-66000);
+ for(let i=u8.length-22;i>=from;i--){if(dv.getUint32(i,true)===0x06054b50){e=i;break}}
+ if(e<0)throw new Error('not a ZIP archive');
+ const count=dv.getUint16(e+10,true);
+ let p=dv.getUint32(e+16,true);
+ const dec=new TextDecoder('utf-8');
+ const out={};
+ for(let i=0;i<count;i++){
+  if(p+46>u8.length||dv.getUint32(p,true)!==0x02014b50)break;
+  const method=dv.getUint16(p+10,true),csize=dv.getUint32(p+20,true);
+  const nlen=dv.getUint16(p+28,true),elen=dv.getUint16(p+30,true),
+        clen=dv.getUint16(p+32,true),lho=dv.getUint32(p+42,true);
+  const name=dec.decode(u8.subarray(p+46,p+46+nlen));
+  if(lho+30<=u8.length){
+   const s=lho+30+dv.getUint16(lho+26,true)+dv.getUint16(lho+28,true);
+   if(s>=0&&s+csize<=u8.length)
+    out[name.toLowerCase()]={method:method,data:u8.subarray(s,s+csize)};
+  }
+  p+=46+nlen+elen+clen;
+ }
+ return out;
+}
+async function skinInflate(u8){
+ if(typeof DecompressionStream==='undefined')
+  throw new Error('this browser cannot unpack .wsz (no DecompressionStream)');
+ const st=new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+ return new Uint8Array(await new Response(st).arrayBuffer());
+}
+/* имена в скинах бывают в разном регистре — ключи словаря в нижнем */
+async function skinEntry(files,name){
+ const it=files[String(name).toLowerCase()];
+ if(!it)return null;
+ if(it.method===0)return it.data;
+ if(it.method===8)return await skinInflate(it.data);
+ throw new Error('unsupported ZIP compression: '+it.method);
+}
+
+/* --- BMP: 8/24/32 bpp без сжатия (ровно то, чем рисует Winamp) -------- */
+function skinBmp(u8){
+ if(!u8||u8.length<54||u8[0]!==0x42||u8[1]!==0x4d)throw new Error('not a BMP file');
+ const dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength);
+ const off=dv.getUint32(10,true),hsize=dv.getUint32(14,true);
+ const w=dv.getInt32(18,true);
+ let h=dv.getInt32(22,true);
+ const bpp=dv.getUint16(28,true),comp=dv.getUint32(30,true);
+ const down=h<0;if(down)h=-h;
+ if(!(w>0&&h>0&&w<8192&&h<16384))throw new Error('bad BMP size');
+ if(comp!==0&&comp!==3)throw new Error('compressed BMP is not supported');
+ if(bpp!==8&&bpp!==24&&bpp!==32)throw new Error(bpp+'-bit BMP is not supported');
+ const stride=((w*bpp+31)>>5)<<2,px=bpp>>3;
+ const rgba=new Uint8ClampedArray(w*h*4);
+ let pal=null;
+ if(bpp===8){
+  const ncol=dv.getUint32(46,true)||256,poff=14+hsize;
+  pal=new Uint8Array(ncol*3);
+  for(let i=0;i<ncol&&poff+i*4+2<u8.length;i++){
+   pal[i*3]=u8[poff+i*4+2];      // BGR -> RGB
+   pal[i*3+1]=u8[poff+i*4+1];
+   pal[i*3+2]=u8[poff+i*4];
+  }
+ }
+ for(let y=0;y<h;y++){
+  const row=off+(down?y:h-1-y)*stride;
+  if(row<0)continue;
+  for(let x=0;x<w;x++){
+   const o=(y*w+x)*4;
+   if(bpp===8){
+    const idx=u8[row+x];
+    if(pal&&idx*3+2<pal.length){rgba[o]=pal[idx*3];rgba[o+1]=pal[idx*3+1];rgba[o+2]=pal[idx*3+2];}
+   }else{
+    const s=row+x*px;
+    if(s+2<u8.length){rgba[o]=u8[s+2];rgba[o+1]=u8[s+1];rgba[o+2]=u8[s];}
+   }
+   rgba[o+3]=255;                // альфа-канала в скинах Winamp нет
+  }
+ }
+ const cv=document.createElement('canvas');
+ cv.width=w;cv.height=h;
+ cv.getContext('2d').putImageData(new ImageData(rgba,w,h),0,0);
+ return cv;
+}
+
+/* цвета плейлиста берутся из pledit.txt, иначе — классические значения */
+function skinColors(bytes){
+ const c={Normal:'#00ff00',Current:'#ffffff',NormalBG:'#000000',
+          SelectedBG:'#0000c6',Font:'Arial'};
+ if(!bytes)return c;
+ let s='';for(let i=0;i<bytes.length;i++)s+=String.fromCharCode(bytes[i]);
+ s.split(/\r?\n/).forEach(function(line){
+  const m=/^\s*([A-Za-z_]+)\s*=\s*(.*?)\s*$/.exec(line);
+  if(!m)return;
+  const k=m[1],v=m[2];
+  if(k==='Font'){if(v)c.Font=v;return}
+  const hx=v.replace(/^#/,'');
+  if(/^[0-9a-fA-F]{6}$/.test(hx))c[k]='#'+hx.toLowerCase();
+ });
+ return c;
+}
+
+async function skinParse(buf){
+ const files=await skinUnzip(buf);
+ const img={};
+ const need=['main','titlebar','cbuttons','shufrep','posbar','numbers',
+             'text','playpaus','monoster','volume','balance','pledit'];
+ for(let i=0;i<need.length;i++){
+  const b=await skinEntry(files,need[i]+'.bmp');
+  if(!b)continue;
+  try{img[need[i]]=skinBmp(b)}catch(err){console.warn('[skin]',need[i],err.message)}
+ }
+ if(!img.main)throw new Error('main.bmp is missing in the skin');
+ return {img:img,colors:skinColors(await skinEntry(files,'pledit.txt'))};
+}
+
+/* --- рисование -------------------------------------------------------- */
+function blit(ctx,img,sx,sy,sw,sh,dx,dy,dw,dh){
+ if(!img||!ctx)return;
+ if(dw==null)dw=sw;if(dh==null)dh=sh;
+ let cx=0,cy=0,cw=sw,chh=sh;
+ if(sx<0){cx=-sx;cw+=sx;sx=0}
+ if(sy<0){cy=-sy;chh+=sy;sy=0}
+ if(sx+sw>img.width)cw-=sx+sw-img.width;
+ if(sy+sh>img.height)chh-=sy+sh-img.height;
+ if(cw<=0||chh<=0)return;
+ ctx.drawImage(img,sx,sy,cw,chh,dx+cx*dw/sw,dy+cy*dh/sh,cw*dw/sw,chh*dh/sh);
+}
+function skinText(ctx,img,str,x,y,clip){
+ if(!img)return;
+ ctx.save();
+ if(clip){ctx.beginPath();ctx.rect(clip[0],clip[1],clip[2],clip[3]);ctx.clip()}
+ let cx=x;const s=String(str);
+ for(let i=0;i<s.length;i++){
+  const g=SKIN_FONT[s[i].toLowerCase()];
+  if(g)blit(ctx,img,g[1]*5,g[0]*6,5,6,cx,y,5,6);
+  cx+=5;
+ }
+ ctx.restore();
+}
+function skinScale(){return Math.max(1,Math.min(4,Number((musicCfg().skins||{}).scale)||2))}
+function plHeight(){return Math.max(96,Number((musicCfg().skins||{}).playlistHeight)||196)}
+function skinPlGeom(){
+ const H=plHeight(),listTop=SKIN_PLTOP+3,listH=H-SKIN_PLTOP-SKIN_PLBOT-6;
+ return {H:H,top:SKIN_PLTOP,bot:H-SKIN_PLBOT,listTop:listTop,listH:listH,
+         rows:Math.max(1,Math.floor(listH/SKIN_ROWH))};
+}
+
+/* --- главное окно ----------------------------------------------------- */
+function skinRender(){
+ if(!skinActive||!skin)return;
+ const cv=skinCvMain,ctx=cv.getContext('2d'),im=skin.img;
+ ctx.imageSmoothingEnabled=false;
+ blit(ctx,im.main,0,0,SKIN_W,SKIN_H,0,0,SKIN_W,SKIN_H);
+ /* В части скинов main.bmp — «снимок» с запечёнными цифрами, текстом
+  бегущей строки и индикаторами. Зоны, куда мы рисуем живое содержимое,
+  сначала гасим (фон у них чёрный — как в оригинальном Winamp). */
+ ctx.fillStyle='#000';
+ SKIN_DIGITS.forEach(function(d){ctx.fillRect(d[0],d[1],9,13)});
+ ctx.fillRect(SKIN_MARQUEE[0],SKIN_MARQUEE[1]-1,SKIN_MARQUEE[2],SKIN_MARQUEE[3]+3);
+ if(im.titlebar){
+  const st=musicWin.classList.contains('active')?SKIN_TITLEBAR.on:SKIN_TITLEBAR.off;
+  blit(ctx,im.titlebar,st[0],st[1],275,14,0,0,275,14);
+  SKIN_TITLEBTNS.forEach(function(b){
+   const s=b.src[skinPress===b.id?1:0];
+   blit(ctx,im.titlebar,s[0],s[1],9,9,b.x,3,9,9);
+  });
+ }
+ const hasSrc=!!audioEl.getAttribute('src');
+ if(im.playpaus){
+  blit(ctx,im.playpaus,hasSrc?(audioEl.paused?9:0):18,0,9,9,
+       SKIN_PLAYPAUS[0],SKIN_PLAYPAUS[1],9,9);
+ }
+ if(im.numbers&&hasSrc){
+  const t=isFinite(audioEl.currentTime)?audioEl.currentTime:0;
+  const m=Math.min(99,Math.floor(t/60)),s=Math.floor(t%60);
+  const blink=audioEl.paused&&t>0&&Math.floor(Date.now()/1000)%2===1;
+  const ch=[m<10?'':String(Math.floor(m/10)),String(m%10),
+            String(Math.floor(s/10)),String(s%10)];
+  for(let i=0;i<4;i++){
+   if(ch[i]===' '||blink)continue;
+   const d=ch[i].charCodeAt(0)-48;
+   if(d>=0&&d<=9)blit(ctx,im.numbers,d*9,0,9,13,SKIN_DIGITS[i][0],SKIN_DIGITS[i][1],9,13);
+  }
+ }
+ const title=(musicIndex>=0&&musicTracks[musicIndex])
+   ?musicName(musicTracks[musicIndex]):'';
+ if(title&&im.text){
+  const box=SKIN_MARQUEE,w=title.length*5;
+  if(w<=box[2])skinText(ctx,im.text,title,box[0],box[1],box);
+  else{
+   const span=w+18,off=((Date.now()/1000)*22)%span;
+   skinText(ctx,im.text,title,box[0]-off,box[1],box);
+   skinText(ctx,im.text,title,box[0]-off+span,box[1],box);
+  }
+ }
+ if(im.monoster){
+  blit(ctx,im.monoster,29,12,27,12,SKIN_MONO[0],SKIN_MONO[1],27,12);
+  blit(ctx,im.monoster,0,0,29,12,SKIN_STEREO[0],SKIN_STEREO[1],29,12);
+ }
+ if(im.volume){
+  blit(ctx,im.volume,0,0,68,13,SKIN_VOL[0],SKIN_VOL[1],68,13);
+  const v=Math.max(0,Math.min(1,audioEl.volume));
+  blit(ctx,im.volume,15,422,14,11,SKIN_VOL[0]+Math.round(v*51),SKIN_VOL[1]+1,14,11);
+ }
+ if(im.balance){
+  blit(ctx,im.balance,9,0,38,13,SKIN_BAL[0],SKIN_BAL[1],38,13);
+  blit(ctx,im.balance,15,422,14,11,SKIN_BAL[0]+12,SKIN_BAL[1]+1,14,11);
+ }
+ if(im.posbar){
+  blit(ctx,im.posbar,0,0,248,10,SKIN_POS[0],SKIN_POS[1],248,10);
+  const d=(isFinite(audioEl.duration)&&audioEl.duration>0)
+    ?audioEl.currentTime/audioEl.duration:0;
+  blit(ctx,im.posbar,248,0,29,10,
+       SKIN_POS[0]+Math.round(Math.max(0,Math.min(1,d))*219),SKIN_POS[1],29,10);
+ }
+ if(im.cbuttons){
+  SKIN_BTNS.forEach(function(b){
+   const press=skinPress===b[0];
+   blit(ctx,im.cbuttons,b[5],b[6]+(press?b[7]:0),b[3],b[4],b[1],b[2],b[3],b[4]);
+  });
+ }
+ if(im.shufrep){
+  SKIN_SHUF.forEach(function(b){
+   const on=b[0]==='shuffle'?musicShuffle:(musicLoop!=='off');
+   const press=skinPress===b[0];
+   const row=on?(press?45:30):(press?15:0);
+   blit(ctx,im.shufrep,b[5],b[6]+row,b[3],b[4],b[1],b[2],b[3],b[4]);
+  });
+  const eqOn=false;
+  blit(ctx,im.shufrep,eqOn?0:46,eqOn?73:61,23,12,SKIN_EQ[0],SKIN_EQ[1],23,12);
+  const plOn=skinPlOn;
+  blit(ctx,im.shufrep,plOn?23:69,plOn?73:61,23,12,SKIN_PL[0],SKIN_PL[1],23,12);
+ }
+}
+
+/* --- плейлист --------------------------------------------------------- */
+function skinRenderPlaylist(){
+ if(!skinActive||!skin)return;
+ const ctx=skinCvPl.getContext('2d'),im=skin.img,c=skin.colors;
+ const W=SKIN_W,g=skinPlGeom();
+ ctx.imageSmoothingEnabled=false;
+ if(im.pledit){
+  blit(ctx,im.pledit,0,21,25,20,0,0,25,20);
+  for(let x=25;x<W-25;x+=25)blit(ctx,im.pledit,127,21,25,20,x,0,25,20);
+  blit(ctx,im.pledit,153,21,25,20,W-25,0,25,20);
+  blit(ctx,im.pledit,26,21,100,20,37,0,100,20);
+ }else{
+  ctx.fillStyle=c.NormalBG;ctx.fillRect(0,0,W,g.top);
+ }
+ const cap=String((musicCfg().windowTitle||'Audio Player'));
+ skinText(ctx,im.text,cap,41,7,[37,0,100,20]);
+ if(im.pledit){
+  for(let y=g.top;y<g.bot;y+=29)
+   blit(ctx,im.pledit,0,42,12,Math.min(29,g.bot-y),0,y,12,g.bot-y);
+  for(let y=g.top;y<g.bot;y+=29)
+   blit(ctx,im.pledit,31,42,20,Math.min(29,g.bot-y),W-20,y,20,g.bot-y);
+ }else{
+  ctx.fillStyle=c.NormalBG;ctx.fillRect(0,g.top,W,g.bot-g.top);
+ }
+ ctx.fillStyle=c.NormalBG;
+ ctx.fillRect(12,g.top,W-32,g.bot-g.top);
+ const maxScroll=Math.max(0,musicTracks.length-g.rows);
+ if(skinScroll>maxScroll)skinScroll=maxScroll;
+ for(let i=0;i<g.rows;i++){
+  const idx=skinScroll+i;
+  if(idx>=musicTracks.length)break;
+  const y=g.listTop+i*SKIN_ROWH;
+  if(idx===skinSel){ctx.fillStyle=c.SelectedBG;ctx.fillRect(12,y,W-32,SKIN_ROWH)}
+  ctx.fillStyle=idx===musicIndex?c.Current:c.Normal;
+  ctx.font='9px "'+String(c.Font||'Arial').replace(/"/g,'')+'", Arial, sans-serif';
+  ctx.textBaseline='top';
+  ctx.fillText(musicName(musicTracks[idx]),15,y+2,W-34-15);
+ }
+ if(musicTracks.length>g.rows&&im.pledit){
+  const th=Math.max(14,g.listH*g.rows/musicTracks.length);
+  const ty=g.listTop+(maxScroll?skinScroll/maxScroll:0)*(g.listH-th);
+  blit(ctx,im.pledit,52,53,8,18,W-15,ty,8,th);
+ }
+ if(im.pledit){
+  blit(ctx,im.pledit,0,72,125,38,0,g.bot,125,38);
+  blit(ctx,im.pledit,126,72,150,38,125,g.bot,150,38);
+  [[0,111,14],[54,111,43],[104,111,72],[154,111,101],[204,111,W-44]]
+   .forEach(function(b){blit(ctx,im.pledit,b[0],b[1],22,18,b[2],g.bot+8,22,18)});
+ }else{
+  ctx.fillStyle=c.NormalBG;ctx.fillRect(0,g.bot,W,g.H-g.bot);
+ }
+}
+
+/* --- попадания мышью --------------------------------------------------- */
+function skinHits(){
+ const h=[];
+ SKIN_BTNS.forEach(function(b){h.push({id:b[0],x:b[1],y:b[2],w:b[3],h:b[4]})});
+ SKIN_SHUF.forEach(function(b){h.push({id:b[0],x:b[1],y:b[2],w:b[3],h:b[4]})});
+ h.push({id:'eq',x:SKIN_EQ[0],y:SKIN_EQ[1],w:23,h:12});
+ h.push({id:'pl',x:SKIN_PL[0],y:SKIN_PL[1],w:23,h:12});
+ h.push({id:'seek',x:SKIN_POS[0],y:SKIN_POS[1],w:248,h:10});
+ h.push({id:'vol',x:SKIN_VOL[0],y:SKIN_VOL[1],w:68,h:13});
+ h.push({id:'bal',x:SKIN_BAL[0],y:SKIN_BAL[1],w:38,h:13});
+ SKIN_TITLEBTNS.forEach(function(b){h.push({id:b.id,x:b.x,y:3,w:9,h:9})});
+ h.push({id:'title',x:0,y:0,w:SKIN_W,h:14});
+ return h;
+}
+function skinHit(x,y){
+ const h=skinHits();
+ for(let i=h.length-1;i>=0;i--){
+  const r=h[i];
+  if(x>=r.x&&x<r.x+r.w&&y>=r.y&&y<r.y+r.h)return r;
+ }
+ return null;
+}
+function skinPos(ev,cv){
+ const r=cv.getBoundingClientRect();
+ return [(ev.clientX-r.left)*cv.width/Math.max(1,r.width),
+         (ev.clientY-r.top)*cv.height/Math.max(1,r.height)];
+}
+function skinDragTo(x){
+ if(skinDrag==='seek'){
+  if(!(isFinite(audioEl.duration)&&audioEl.duration>0))return;
+  const k=Math.max(0,Math.min(1,(x-SKIN_POS[0])/248));
+  audioEl.currentTime=k*audioEl.duration;
+  skinRender();
+ }else if(skinDrag==='vol'){
+  const k=Math.max(0,Math.min(1,(x-SKIN_VOL[0])/65));
+  audioEl.volume=k;
+  if(musicVolEl)musicVolEl.value=String(Math.round(k*100));
+  skinRender();
+ }
+}
+function skinAction(id){
+ switch(id){
+  case 'play':musicToggle();break;
+  case 'stop':audioEl.pause();audioEl.currentTime=0;musicSyncButtons();break;
+  case 'next':musicNext(false);break;
+  case 'prev':musicPrev();break;
+  case 'eject':{const f=document.querySelector('[data-skin-file]');if(f)f.click();break}
+  case 'shuffle':musicShuffle=!musicShuffle;musicSyncButtons();break;
+  case 'repeat':musicLoop=musicLoop==='all'?'one':(musicLoop==='one'?'off':'all');
+                musicSyncButtons();break;
+  case 'pl':toggleSkinPlaylist();break;
+  default:break;
+ }
+}
+function toggleSkinPlaylist(){
+ skinPlOn=!skinPlOn;
+ if(skinCvPl)skinCvPl.style.display=skinPlOn?'':'none';
+ skinFitWindow();
+ skinRenderPlaylist();
+}
+
+/* --- размер окна под скин ---------------------------------------------- */
+function skinFitWindow(){
+ if(!skinActive||!musicWin||!skinHost)return;
+ const sc=skinScale(),body=musicWin.querySelector('.winbody');
+ const contentW=SKIN_W*sc,contentH=(SKIN_H+(skinPlOn?plHeight():0))*sc;
+ skinCvMain.style.width=contentW+'px';
+ skinCvMain.style.height=(SKIN_H*sc)+'px';
+ skinCvPl.style.width=contentW+'px';
+ skinCvPl.style.height=(skinPlOn?plHeight()*sc:0)+'px';
+ skinHost.style.minWidth=contentW+'px';
+ skinHost.style.minHeight=contentH+'px';
+ if(!body)return;
+ const cs=getComputedStyle(body);
+ const padH=(parseFloat(cs.paddingLeft)||0)+(parseFloat(cs.paddingRight)||0);
+ const padV=(parseFloat(cs.paddingTop)||0)+(parseFloat(cs.paddingBottom)||0);
+ const gap=parseFloat(cs.rowGap)||0;
+ let sum=0,n=0;
+ for(let i=0;i<body.children.length;i++){
+  const c=body.children[i];
+  if(getComputedStyle(c).display==='none')continue;
+  sum+=(c===skinHost?SKIN_H*sc+(skinPlOn?plHeight()*sc:0):c.offsetHeight);
+  n++;
+ }
+ sum+=gap*Math.max(0,n-1);
+ const bw=Math.max(0,musicWin.offsetWidth-body.clientWidth);
+ const bh=Math.max(0,musicWin.offsetHeight-body.clientHeight);
+ musicWin.style.width=(contentW+padH+bw)+'px';
+ musicWin.style.height=(sum+padV+bh)+'px';
+ musicWin.style.right='auto';musicWin.style.bottom='auto';
+ const sw=scene.clientWidth,sh=scene.clientHeight;
+ if(musicWin.dataset.manual!=='1'&&musicWin.dataset.placed!=='1'){
+  musicWin.dataset.placed='1';
+  musicWin.style.left=Math.max(10,Math.round((sw-musicWin.offsetWidth)/2))+'px';
+  musicWin.style.top=Math.max(10,Math.round((sh-musicWin.offsetHeight)/2))+'px';
+ }
+ /* строгая посадка: окно со скином целиком помещается над панелью задач */
+ const w=Math.min(musicWin.offsetWidth,sw),h=Math.min(musicWin.offsetHeight,sh);
+ const l=parseFloat(musicWin.style.left),t=parseFloat(musicWin.style.top);
+ musicWin.style.left=Math.min(Math.max(isNaN(l)?0:l,0),Math.max(0,sw-w))+'px';
+ musicWin.style.top=Math.min(Math.max(isNaN(t)?0:t,0),Math.max(0,sh-h))+'px';
+ musicWin.style.width=w+'px';musicWin.style.height=h+'px';
+}
+
+/* --- включение / выключение скина -------------------------------------- */
+function deactivateSkin(){
+ const was=skinActive;
+ skinActive=false;skin=null;skinPress=null;skinDrag=null;
+ if(skinHost)skinHost.classList.remove('on');
+ const mi=document.querySelector('.music-inner');
+ if(mi)mi.classList.remove('off');
+ const sel=document.querySelector('[data-skin-select]');
+ if(sel)sel.value='';
+ if(musicWin&&musicWin.dataset.manual!=='1'){
+  const cfg=musicCfg(),sw=scene.clientWidth,sh=scene.clientHeight;
+  const w=Math.min(Math.max(250,Number(cfg.width)||300),Math.max(250,sw-20));
+  const h=Math.min(Math.max(210,Number(cfg.height)||300),Math.max(210,sh-20));
+  musicWin.style.width=w+'px';musicWin.style.height=h+'px';
+  musicWin.style.right='auto';musicWin.style.bottom='auto';
+  clampWindow(musicWin);
+ }
+}
+async function applySkin(name,bytes){
+ const sel=document.querySelector('[data-skin-select]');
+ try{
+  if(!name&&!bytes){deactivateSkin();return}
+  let buf=bytes;
+  if(!buf&&name&&name[0]==='~')buf=skinDisk[name];
+  if(!buf){
+   const cfg=musicCfg().skins||{};
+   const base=String(cfg.dir||'skins/').replace(/\/?$/,'/');
+   const url=base+String(name).split('/').map(encodeURIComponent).join('/');
+   const r=await fetch(url,{cache:'no-store'});
+   if(!r.ok)throw new Error(r.status===404?'no such file (HTTP 404)':'HTTP '+r.status);
+   buf=await r.arrayBuffer();
+  }
+  const parsed=await skinParse(buf);
+  skin=parsed;skinActive=true;skinName=String(name||'');
+  skinScroll=0;skinSel=-1;skinPlOn=true;
+  skinCvPl.style.display='';
+  skinHost.classList.add('on');
+  const mi=document.querySelector('.music-inner');
+  if(mi)mi.classList.add('off');
+  skinFitWindow();
+  skinRender();skinRenderPlaylist();
+  if(sel)sel.value=name||'';
+  setMusicStatus('Skin: '+String(name||'from disk').replace(/^~/,'')+
+                 ' · '+musicTracks.length+' track'+(musicTracks.length===1?'':'s'));
+ }catch(err){
+  console.warn('[skin]',err);
+  setMusicStatus('Cannot load skin: '+(err&&err.message?err.message:'unknown error'));
+  if(sel)sel.value=skinActive&&skinName?skinName:'';
+  if(!skinActive)deactivateSkin();
+ }
+}
+function loadSkinList(){
+ const cfg=musicCfg().skins||{};
+ const sel=document.querySelector('[data-skin-select]');
+ if(!sel)return Promise.resolve();
+ sel.innerHTML='';
+ sel.appendChild(new Option('No skin (classic)',''));
+ if(!cfg.list)return Promise.resolve();
+ return fetch(cfg.list,{cache:'no-store'})
+  .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
+  .then(function(j){
+   const names=Array.isArray(j&&j.skins)?j.skins:[];
+   names.forEach(function(n){sel.appendChild(new Option(n,n))});
+   if(cfg.start&&names.indexOf(cfg.start)>=0){sel.value=cfg.start;return applySkin(cfg.start)}
+  })
+  .catch(function(err){
+   console.warn('[skin]',err);
+   setMusicStatus('Skin list unavailable ('+err.message+')');
+  });
+}
+function skinTick(){if(skinActive)skinRender()}
+
+(function initSkins(){
+ const cfg=musicCfg().skins||{};
+ if(cfg.enabled===false)return;
+ skinHost=document.querySelector('[data-skin-host]');
+ if(!skinHost)return;
+ skinCvMain=document.createElement('canvas');
+ skinCvMain.width=SKIN_W;skinCvMain.height=SKIN_H;
+ skinCvMain.setAttribute('data-skin-main','1');
+ skinCvPl=document.createElement('canvas');
+ skinCvPl.width=SKIN_W;skinCvPl.height=plHeight();
+ skinCvPl.setAttribute('data-skin-pl','1');
+ skinHost.appendChild(skinCvMain);
+ skinHost.appendChild(skinCvPl);
+
+ /* главное окно: нажатия кнопок, перемотка, громкость, перетаскивание */
+ skinCvMain.addEventListener('pointerdown',function(ev){
+  if(ev.button!==0)return;
+  const p=skinPos(ev,skinCvMain),hit=skinHit(p[0],p[1]);
+  if(!hit)return;
+  if(hit.id==='close'){showWindow(musicWin,false);return}
+  if(hit.id==='title'){
+   const rect=musicWin.getBoundingClientRect();
+   dragState={win:musicWin,offX:ev.clientX-rect.left,offY:ev.clientY-rect.top};
+   focusWindow(musicWin);
+   try{skinCvMain.setPointerCapture(ev.pointerId)}catch(e){}
+   ev.preventDefault();skinRender();return;
+  }
+  if(hit.id==='seek'||hit.id==='vol'){
+   skinDrag=hit.id;skinDragTo(p[0]);
+   try{skinCvMain.setPointerCapture(ev.pointerId)}catch(e){}
+   ev.preventDefault();return;
+  }
+  skinPress=hit.id;
+  try{skinCvMain.setPointerCapture(ev.pointerId)}catch(e){}
+  ev.preventDefault();skinRender();
+ });
+ skinCvMain.addEventListener('pointermove',function(ev){
+  const p=skinPos(ev,skinCvMain);
+  if(skinDrag){skinDragTo(p[0]);ev.preventDefault();return}
+  const hit=skinHit(p[0],p[1]);
+  skinCvMain.style.cursor=hit&&hit.id!=='title'?'pointer':'default';
+ });
+ skinCvMain.addEventListener('pointerup',function(ev){
+  if(skinDrag){skinDrag=null;return}
+  const p=skinPos(ev,skinCvMain),hit=skinHit(p[0],p[1]);
+  const press=skinPress;skinPress=null;
+  if(press&&hit&&hit.id===press)skinAction(press);
+  skinRender();
+ });
+ skinCvMain.addEventListener('pointercancel',function(){
+  skinPress=null;skinDrag=null;skinRender();
+ });
+
+ /* плейлист: клик по строке = играть, колесо = прокрутка */
+ skinCvPl.addEventListener('pointerdown',function(ev){
+  if(ev.button!==0)return;
+  const p=skinPos(ev,skinCvPl),g=skinPlGeom();
+  const row=Math.floor((p[1]-g.listTop)/SKIN_ROWH);
+  if(row<0||row>=g.rows)return;
+  const idx=skinScroll+row;
+  if(idx<0||idx>=musicTracks.length)return;
+  skinSel=idx;
+  musicPlay(idx);
+  skinRenderPlaylist();
+ });
+ skinCvPl.addEventListener('wheel',function(ev){
+  const g=skinPlGeom(),max=Math.max(0,musicTracks.length-g.rows);
+  const next=Math.max(0,Math.min(max,skinScroll+(ev.deltaY>0?3:-3)));
+  if(next===skinScroll)return;
+  skinScroll=next;skinRenderPlaylist();ev.preventDefault();
+ },{passive:false});
+
+ /* панель выбора скина */
+ const sel=document.querySelector('[data-skin-select]');
+ if(sel)sel.addEventListener('change',function(){
+  const v=sel.value;
+  if(!v){deactivateSkin();return}
+  applySkin(v,skinDisk[v]);
+ });
+ const openBtn=document.querySelector('[data-skin-open]');
+ const fileEl=document.querySelector('[data-skin-file]');
+ if(openBtn&&fileEl){
+  openBtn.addEventListener('click',function(){fileEl.click()});
+  fileEl.addEventListener('change',function(){
+   const f=fileEl.files&&fileEl.files[0];
+   fileEl.value='';
+   if(f)loadSkinFromDisk(f);
+  });
+ }
+ /* перетащить .wsz прямо на окно плеера */
+ if(musicWin){
+  musicWin.addEventListener('dragover',function(ev){
+   if(ev.dataTransfer&&Array.prototype.indexOf.call(ev.dataTransfer.types,'Files')>=0)
+    ev.preventDefault();
+  });
+  musicWin.addEventListener('drop',function(ev){
+   const f=ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];
+   if(!f)return;
+   ev.preventDefault();
+   loadSkinFromDisk(f);
+  });
+  musicWin.addEventListener('pointerdown',function(){skinRender()});
+ }
+ loadSkinList();
+ setInterval(skinTick,100);
+})();
+
+function loadSkinFromDisk(file){
+ if(!/\.(wsz|zip)$/i.test(file.name)){
+  setMusicStatus('Cannot open: '+file.name+' — a skin must be .wsz or .zip');
+  return;
+ }
+ const sel=document.querySelector('[data-skin-select]');
+ file.arrayBuffer().then(function(buf){
+  const key='~'+file.name;
+  skinDisk[key]=buf;
+  if(sel){
+   let opt=null;
+   for(let i=0;i<sel.options.length;i++)if(sel.options[i].value===key)opt=sel.options[i];
+   if(!opt){opt=new Option(file.name+' (disk)',key);sel.appendChild(opt)}
+   sel.value=key;
+  }
+  return applySkin(key,buf);
+ }).catch(function(err){
+  console.warn('[skin]',err);
+  setMusicStatus('Cannot read '+file.name+': '+err.message);
+ });
+}
+
+(function initMusic(){
+ const cfg=musicCfg();
+ if(cfg.enabled===false)return;
+ musicShuffle=!!cfg.shuffle;
+ musicLoop=cfg.loop||'all';
+ if(musicVolEl){
+  const v=cfg.volume==null?0.8:Number(cfg.volume);
+  musicVolEl.value=String(Math.round(Math.max(0,Math.min(1,v))*100));
+  audioEl.volume=Math.max(0,Math.min(1,v));
+ }
+ musicSyncButtons();
+ musicTrackTitle();
+ loadMusic();
+ if(cfg.startOpen&&musicWin)showWindow(musicWin,true);
+})();
+
+function layoutWindows(force){
+  /* Есть сохранённая раскладка — применяем её (координаты хранятся дробями
+     от размера сцены, поэтому переживают другой размер окна браузера).
+     Иначе — расставляем окна по умолчанию, как раньше. */
+  if(layoutReady&&savedLayout&&CONFIG.rememberLayout!==false&&applySavedLayout(savedLayout))return;
+  const sw=scene.clientWidth,sh=scene.clientHeight,m=10;
+  const servers=document.getElementById('winServers');
+  servers.style.left=m+'px';
+  servers.style.top=m+'px';
+  servers.style.right='auto';
+  servers.style.bottom='auto';
+  servers.style.width='auto';
+  servers.style.height='auto';
+  servers.style.maxWidth=(sw-2*m)+'px';
+  servers.style.maxHeight=(sh-2*m)+'px';
+  servers.dataset.maximized='0';
+  autoSizeArt(force);
+  placeMonitor();
+  placeMusic();
+}
+
+/* === Конструктор раскладки ================================================
+   Что снимаем (captureLayout): какие окна открыты, их положение и размер в
+   долях от сцены, порядок (z), какие карточки services выключены.
+   Что применяем (applySavedLayout): доли * текущий размер сцены, зажатые
+   внутрь рабочего стола (в т.ч. над таскбаром — он вне сцены).
+   Куда пишем (saveLayoutNow): POST api/layout -> layout.json на сервере,
+   плюс зеркало в localStorage на случай недоступности сервера.          === */
+function rnd4(v){return Math.round(v*1e4)/1e4}
+
+function captureLayout(){
+  const sw=scene.clientWidth,sh=scene.clientHeight;
+  if(!sw||!sh)return null;
+  const wins={},order=[];
+  appWindows.forEach(w=>{
+    const autoW=!w.style.width||w.style.width==='auto';
+    const autoH=!w.style.height||w.style.height==='auto';
+    let x=parseFloat(w.style.left),y=parseFloat(w.style.top);
+    let ww=autoW?null:parseFloat(w.style.width);
+    let hh=autoH?null:parseFloat(w.style.height);
+    if(w.dataset.maximized==='1'){          // само окно развернуто — запоминаем
+      const px=parseFloat(w.dataset.prevLeft),py=parseFloat(w.dataset.prevTop); // его размеры до разворачивания
+      const pw=w.dataset.prevW,ph=w.dataset.prevH;
+      if(!isNaN(px))x=px;
+      if(!isNaN(py))y=py;
+      ww=(pw&&pw!=='auto'&&!isNaN(parseFloat(pw)))?parseFloat(pw):null;
+      hh=(ph&&ph!=='auto'&&!isNaN(parseFloat(ph)))?parseFloat(ph):null;
+    }
+    if(isNaN(x)||isNaN(y)){
+      const r=rectInScene(w);
+      if(r.w>0||r.h>0){if(isNaN(x))x=r.x;if(isNaN(y))y=r.y;}
+    }
+    const rec={open:w.hidden?0:1};
+    if(!isNaN(x)&&!isNaN(y)){rec.x=rnd4(x/sw);rec.y=rnd4(y/sh);}
+    rec.w=(ww!=null&&ww>0)?rnd4(ww/sw):null;   // null = окно с авто-размером
+    rec.h=(hh!=null&&hh>0)?rnd4(hh/sh):null;
+    if(w.dataset.maximized==='1')rec.max=1;
+    wins[w.id]=rec;
+    order.push({id:w.id,z:Number(w.style.zIndex)||0});
+  });
+  order.sort((a,b)=>a.z-b.z);
+  return {v:1,scene:{w:sw,h:sh},z:order.map(o=>o.id),wins,
+          svc:[...hiddenSvc].sort((a,b)=>a-b),theme:currentTheme};
+}
+
+function setMaximized(win,on){
+  if(!win)return;
+  if(on&&win.dataset.maximized!=='1'){
+    win.dataset.prevLeft=win.style.left;win.dataset.prevTop=win.style.top;
+    win.dataset.prevW=win.style.width;win.dataset.prevH=win.style.height;
+    win.style.right='auto';win.style.bottom='auto';
+    win.style.left='2px';win.style.top='2px';
+    win.style.width=(scene.clientWidth-4)+'px';
+    win.style.height=(scene.clientHeight-4)+'px';
+    win.dataset.maximized='1';
+    fitAscii();
+  }else if(!on&&win.dataset.maximized==='1'){
+    if(win.dataset.prevLeft!=null)win.style.left=win.dataset.prevLeft;
+    if(win.dataset.prevTop!=null)win.style.top=win.dataset.prevTop;
+    if(win.dataset.prevW)win.style.width=win.dataset.prevW;
+    if(win.dataset.prevH)win.style.height=win.dataset.prevH;
+    win.dataset.maximized='0';
+    fitAscii();
+  }
+}
+
+function applySavedLayout(data){
+  if(!data||data.v!==1||!data.wins)return false;
+  const sw=scene.clientWidth,sh=scene.clientHeight;
+  if(!sw||!sh)return false;
+  layoutApplying=true;
+  try{
+    /* тема приезжает вместе с раскладкой — выбрано где-то ещё, значит общее */
+    if(data.theme==='dark'||data.theme==='light')applyTheme(data.theme);
+    const m=10;
+    appWindows.forEach(w=>{
+      const rec=data.wins[w.id];if(!rec)return;
+      /* геометрия: доля -> пиксели, затем зажимаем внутрь сцены */
+      const autoW=rec.w==null,autoH=rec.h==null;
+      w.style.right='auto';w.style.bottom='auto';
+      w.style.maximized='0';
+      w.style.width=autoW?'auto':Math.min(Math.max(120,Math.round(rec.w*sw)),sw)+'px';
+      w.style.height=autoH?'auto':Math.min(Math.max(90,Math.round(rec.h*sh)),sh)+'px';
+      w.style.maxWidth=autoW?Math.max(120,sw-2*m)+'px':'';
+      w.style.maxHeight=autoH?Math.max(90,sh-2*m)+'px':'';
+      const rw=w.offsetWidth||0,rh=w.offsetHeight||0;
+      let x=rec.x==null?null:Math.round(rec.x*sw);
+      let y=rec.y==null?null:Math.round(rec.y*sh);
+      if(x==null||y==null){                     // координат нет — центрируем
+        if(x==null)x=Math.round((sw-rw)/2);
+        if(y==null)y=Math.round((sh-rh)/2);
+      }
+      x=Math.min(Math.max(x,0),Math.max(0,sw-rw));
+      y=Math.min(Math.max(y,0),Math.max(0,sh-rh));
+      w.style.left=x+'px';w.style.top=y+'px';
+      /* позиция восстановлена — авто-расстановки её больше не трогают */
+      w.dataset.manual='1';
+      if(w.id==='winMusic')w.dataset.placed='1';
+      /* открыто/закрыто (выключенные в config.js окна остаются закрытыми) */
+      const offByConfig=(w.id==='winMusic'&&musicCfg().enabled===false)||
+                        (w.id==='winMonitor'&&(CONFIG.monitor||{}).enabled===false);
+      const wantOpen=!offByConfig&&!!rec.open;
+      w.hidden=!wantOpen;
+      if(!wantOpen){const btn=taskFor(w);if(btn)btn.classList.remove('active');}
+      if(wantOpen&&rec.max)setMaximized(w,true);
+    });
+    /* карточки services */
+    if(Array.isArray(data.svc)){
+      const s=new Set();
+      data.svc.forEach(i=>{if(Number.isInteger(i)&&i>=0&&i<CONFIG.services.length)s.add(i)});
+      hiddenSvc=s;
+    }
+    renderServices();
+    /* порядок окон */
+    const order=Array.isArray(data.z)?data.z:[];
+    order.forEach((id,i)=>{
+      const w=appWindows.find(el=>el.id===id);
+      if(w)w.style.zIndex=String(10+i);
+    });
+    zCounter=Math.max(zCounter,10+appWindows.length+order.length);
+    const topId=order[order.length-1];
+    const topW=topId?document.getElementById(topId):null;
+    const active=(topW&&!topW.hidden)?topW:appWindows.find(w=>!w.hidden);
+    if(active)focusWindow(active);
+  }catch(err){
+    console.warn('[layout] apply failed',err);
+    layoutApplying=false;
+    return false;
+  }
+  layoutApplying=false;
+  fitAscii();
+  syncLayoutPalette();
+  return true;
+}
+
+function flashStatus(msg){
+  const cell=document.querySelector('.statusbar div');
+  if(!cell)return;
+  if(!flashStatus.home)flashStatus.home=cell.textContent;
+  cell.textContent=msg;
+  clearTimeout(flashTimer);
+  flashTimer=setTimeout(()=>{cell.textContent=flashStatus.home},3500);
+}
+
+function scheduleLayoutSave(){
+  if(!layoutReady||layoutApplying)return;
+  if(CONFIG.rememberLayout===false)return;
+  clearTimeout(layoutSaveTimer);
+  layoutSaveTimer=setTimeout(()=>saveLayoutNow(false),400);
+}
+
+function saveLayoutNow(manual){
+  if(CONFIG.rememberLayout===false){
+    if(manual)flashStatus('Layout memory is off (config.js)');
+    return;
+  }
+  const data=captureLayout();
+  if(!data){
+    if(manual)flashStatus('Nothing to save — no window is visible');
+    return;
+  }
+  savedLayout=data;
+  try{localStorage.setItem(LAYOUT_KEY,JSON.stringify(data))}catch(e){}
+  syncLayoutPalette();
+  fetch('api/layout',{method:'POST',headers:{'Content-Type':'application/json'},
+                      body:JSON.stringify(data)})
+    .then(res=>{
+      if(!res.ok)throw new Error('HTTP '+res.status);
+      if(manual)flashStatus('Layout saved');
+    })
+    .catch(err=>{
+      console.warn('[layout] save failed',err);
+      if(manual)flashStatus('Layout saved on this device (server unreachable)');
+    });
+}
+
+async function loadSavedLayout(){
+  try{                                   // сначала сервер — он главный
+    const res=await fetch('api/layout',{cache:'no-store'});
+    if(res.ok){
+      const data=await res.json();
+      if(data&&data.v===1&&data.wins)return data;
+    }
+  }catch(e){}
+  try{                                   // потом локальное зеркало
+    const raw=localStorage.getItem(LAYOUT_KEY);
+    if(raw){const data=JSON.parse(raw);if(data&&data.v===1&&data.wins)return data;}
+  }catch(e){}
+  return null;
+}
+
+function resetLayout(){
+  savedLayout=null;
+  layoutApplying=true;
+  try{
+    appWindows.forEach(w=>{
+      w.dataset.manual='';w.dataset.placed='';
+      w.dataset.maximized='0';
+      w.style.zIndex='';
+      /* окна открываем как задумано по умолчанию (с учётом config.js) */
+      const offByConfig=(w.id==='winMusic'&&musicCfg().enabled===false)||
+                        (w.id==='winMonitor'&&(CONFIG.monitor||{}).enabled===false);
+      let wantOpen=!offByConfig;
+      if(w.id==='winMusic')wantOpen=wantOpen&&!!musicCfg().startOpen;
+      w.hidden=!wantOpen;
+      if(!wantOpen){const btn=taskFor(w);if(btn)btn.classList.remove('active');}
+    });
+    hiddenSvc=new Set();
+    renderServices();
+  }finally{layoutApplying=false}
+  clearTimeout(layoutSaveTimer);
+  try{localStorage.removeItem(LAYOUT_KEY)}catch(e){}
+  /* тема возвращается к тому, что задано в config.js (выбор кнопки забываем) */
+  setTheme(CONFIG.theme==='dark'?'dark':'light',false);
+  fetch('api/layout',{method:'DELETE'}).catch(()=>{});
+  layoutWindows(true);
+  zCounter=10;
+  focusWindow(document.getElementById('winServers'));
+  syncLayoutPalette();
+  flashStatus('Layout reset');
+}
+
+/* --- палитра (View → Layout constructor…) -------------------------------- */
+function winTitle(w){
+  const el=w.querySelector('[data-server-name],[data-art-title],[data-monitor-title],[data-music-title]');
+  if(el&&el.textContent.trim())return el.textContent.trim();
+  const bar=w.querySelector('.titlebar .titleleft>span:last-child');
+  return bar?bar.textContent.trim():w.id;
+}
+function buildLayoutPalette(){
+  if(!layoutPaletteEl)return;
+  const winBox=layoutPaletteEl.querySelector('[data-palette-wins]');
+  const svcBox=layoutPaletteEl.querySelector('[data-palette-svc]');
+  if(winBox)winBox.innerHTML=appWindows.map(w=>{
+    const on=!w.hidden;
+    return `<label class="${on?'':'is-off'}"><input type="checkbox" data-pal-win="${w.id}"${on?' checked':''}>${winTitle(w)}</label>`;
+  }).join('');
+  if(svcBox)svcBox.innerHTML=CONFIG.services.map((svc,i)=>{
+    const on=!hiddenSvc.has(i);
+    return `<label class="${on?'':'is-off'}"><input type="checkbox" data-pal-svc="${i}"${on?' checked':''}>${svc.name} :${svc.port}</label>`;
+  }).join('');
+}
+function syncLayoutPalette(){
+  if(!layoutPaletteEl||layoutPaletteEl.hidden)return;
+  buildLayoutPalette();
+}
+function openLayoutPalette(){
+  if(!layoutPaletteEl)return;
+  buildLayoutPalette();
+  layoutPaletteEl.hidden=false;
+  layoutPaletteEl.style.zIndex=String(++zCounter);
+  if(!layoutPaletteEl.style.left){                       // первый раз — по центру
+    const w=layoutPaletteEl.offsetWidth,h=layoutPaletteEl.offsetHeight;
+    layoutPaletteEl.style.left=Math.max(8,Math.round((window.innerWidth-w)/2))+'px';
+    layoutPaletteEl.style.top=Math.max(8,Math.min(window.innerHeight-h-60,140))+'px';
+  }
+}
+function closeLayoutPalette(){if(layoutPaletteEl)layoutPaletteEl.hidden=true}
+
+if(layoutPaletteEl){
+layoutPaletteEl.addEventListener('change',event=>{
+  const t=event.target;
+  if(t.matches('[data-pal-win]')){
+    const w=document.getElementById(t.dataset.palWin);
+    // checked = окно открыто, а w.hidden — ровно наоборот: срабатываем, когда
+    // фактическое состояние не совпадает с галочкой
+    if(w&&w.hidden===t.checked)showWindow(w,t.checked);
+  }else if(t.matches('[data-pal-svc]')){
+    const i=Number(t.dataset.palSvc);
+    if(t.checked)hiddenSvc.delete(i);else hiddenSvc.add(i);
+    const lab=t.closest('label');if(lab)lab.classList.toggle('is-off',!t.checked);
+    renderServices();
+    scheduleLayoutSave();
+  }
+});
+layoutPaletteEl.addEventListener('click',event=>{
+  if(event.target.closest('[data-palette-close]'))closeLayoutPalette();
+  else if(event.target.closest('[data-palette-save]'))saveLayoutNow(true);
+  else if(event.target.closest('[data-palette-reset]'))resetLayout();
+});
+layoutPaletteEl.addEventListener('pointerdown',event=>{
+  const bar=event.target.closest('[data-palette-drag]');
+  if(!bar||event.target.closest('.window-controls'))return;
+  const rect=layoutPaletteEl.getBoundingClientRect();
+  paletteDrag={offX:event.clientX-rect.left,offY:event.clientY-rect.top};
+  layoutPaletteEl.style.zIndex=String(++zCounter);
+  try{bar.setPointerCapture(event.pointerId)}catch(e){}
+  event.preventDefault();
+});
+}
+window.addEventListener('pointermove',event=>{
+  if(!paletteDrag)return;
+  const x=Math.min(Math.max(0,event.clientX-paletteDrag.offX),Math.max(0,window.innerWidth-70));
+  const y=Math.min(Math.max(0,event.clientY-paletteDrag.offY),Math.max(0,window.innerHeight-30));
+  layoutPaletteEl.style.left=x+'px';layoutPaletteEl.style.top=y+'px';
+});
+window.addEventListener('pointerup',()=>{paletteDrag=null});
+
+
+/* --- System Monitor: опрос /api/stats ---------------------------------- */
+let monitorTimer=null,monitorBusy=false;
+function monitorConfig(){return CONFIG.monitor||{}}
+function monitorHidden(){const w=document.getElementById('winMonitor');return !w||w.hidden}
+function setMetric(name,pct,text){
+  const row=document.querySelector('.metric[data-metric="'+name+'"]');
+  if(!row)return;
+  const fill=row.querySelector('.gauge-fill');
+  if(fill){
+    const v=Number(pct);
+    fill.style.width=(isFinite(v)?Math.max(0,Math.min(100,v)):0)+'%';
+  }
+  const val=row.querySelector('.metric-value');
+  if(val)val.textContent=text;
+}
+function fmtPct(v){return(v==null||!isFinite(Number(v)))?'—':(Math.round(Number(v)*10)/10).toFixed(1)+'%'}
+function esc(v){
+  return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function pctOf(v){const n=Number(v);return isFinite(n)?Math.max(0,Math.min(100,n)):0}
+function usedLevel(v){const n=Number(v);if(!isFinite(n))return'';return n>=90?' is-crit':(n>=75?' is-warn':'')}
+function fmtGb(v){
+  const n=Number(v);
+  if(!isFinite(n))return null;
+  return (n>=100?Math.round(n):Math.round(n*10)/10)+' GB';
+}
+function diskSub(dr){
+  const p=[];
+  const free=fmtGb(dr.free_gb),total=fmtGb(dr.total_gb);
+  if(free&&total)p.push(free+' free of '+total);
+  else if(free)p.push(free+' free');
+  else if(total)p.push(total);
+  if(dr.fstype)p.push(dr.fstype);
+  return p.join(' · ');
+}
+function diskRowHtml(dr,i){
+  return '<div class="srow'+usedLevel(dr.used)+'" data-i="'+i+'">'
+    +'<div class="srow-head">'
+      +'<span class="srow-name" title="'+esc(dr.device_full||dr.device||'')+'">'+esc(dr.mount||'?')+'</span>'
+      +'<span class="srow-meta">'+esc(dr.device||'')+'</span>'
+      +'<span class="srow-val">'+fmtPct(dr.used)+'</span>'
+    +'</div>'
+    +'<div class="gauge"><div class="gauge-fill" style="width:'+pctOf(dr.used)+'%"></div></div>'
+    +'<div class="srow-sub">'+esc(diskSub(dr))+'</div>'
+  +'</div>';
+}
+function syncDiskRow(row,dr){
+  if(!row)return;
+  row.className='srow'+usedLevel(dr.used);
+  const nm=row.querySelector('.srow-name'); if(nm)nm.textContent=dr.mount||'?';
+  const mt=row.querySelector('.srow-meta'); if(mt)mt.textContent=dr.device||'';
+  const vl=row.querySelector('.srow-val'); if(vl)vl.textContent=fmtPct(dr.used);
+  const fl=row.querySelector('.gauge-fill'); if(fl)fl.style.width=pctOf(dr.used)+'%';
+  const sb=row.querySelector('.srow-sub'); if(sb)sb.textContent=diskSub(dr);
+}
+/* --- RAID --------------------------------------------------------------- */
+function raidStateText(r){
+  const st=(r.status?' ['+r.status+']':'');
+  if(r.state==='clean')return 'clean'+st;
+  if(r.state==='degraded')return 'DEGRADED'+st;
+  if(r.state==='inactive')return 'inactive';
+  return r.state||'?';                       // recovery 42.0%, resync …
+}
+function raidLevel(r){
+  const lv=r.level&&r.level!=='md'?r.level+' · ':'';
+  const sz=fmtGb(r.size_gb);
+  return lv+(sz?sz:'');
+}
+function raidPct(r){
+  // null означает «идёт восстановление? нет» — прогресса нет вообще,
+  // поэтому проверяем на null до Number(), иначе Number(null)===0
+  if(r.progress!=null&&r.progress!==''){
+    const p=Number(r.progress);
+    if(isFinite(p))return p;
+  }
+  const total=Number(r.total)||0;
+  return total?((Number(r.online)||0)/total)*100:0;
+}
+function raidClass(r){
+  if(r.state==='clean')return '';
+  if(r.state==='degraded'||r.state==='inactive')return ' is-bad';
+  return ' is-work';
+}
+function partChip(c){
+  const flag=c.flag==='failed'?'×':(c.flag==='spare'?'○':'●');
+  const cls=c.flag==='failed'?'part failed':(c.flag==='spare'?'part spare':'part ok');
+  const sz=Number(c.size_gb)>0?fmtGb(c.size_gb):null;
+  const label=esc(c.device)+(sz?' · '+sz:'')+(c.flag==='spare'?' · spare':'');
+  return '<span class="'+cls+'" title="'+esc(c.flag)+'"><span class="flag">'+flag+'</span>'+label+'</span>';
+}
+function raidRowHtml(r,i){
+  return '<div class="srow'+raidClass(r)+'" data-i="'+i+'">'
+    +'<div class="srow-head">'
+      +'<span class="srow-name" title="'+esc(r.name)+'">'+esc(r.name)+'</span>'
+      +'<span class="srow-meta">'+esc(raidLevel(r))+'</span>'
+      +'<span class="srow-val">'+esc(raidStateText(r))+'</span>'
+    +'</div>'
+    +'<div class="gauge"><div class="gauge-fill" style="width:'+pctOf(raidPct(r))+'%"></div></div>'
+    +'<div class="parts">'+(r.components||[]).map(partChip).join('')+'</div>'
+  +'</div>';
+}
+function syncRaidRow(row,r){
+  if(!row)return;
+  row.className='srow'+raidClass(r);
+  const nm=row.querySelector('.srow-name'); if(nm)nm.textContent=r.name||'?';
+  const mt=row.querySelector('.srow-meta'); if(mt)mt.textContent=raidLevel(r);
+  const vl=row.querySelector('.srow-val'); if(vl)vl.textContent=raidStateText(r);
+  const fl=row.querySelector('.gauge-fill'); if(fl)fl.style.width=pctOf(raidPct(r))+'%';
+}
+/* Тома, перечисленные в CONFIG.monitor.exclude, в Storage не показываем.
+   '/boot' совпадает и с '/boot', и с '/boot/efi'; корень скрыть нельзя. */
+function excludedMounts(){
+  const list=(typeof CONFIG!=='undefined'&&CONFIG.monitor&&CONFIG.monitor.exclude)||[];
+  return Array.isArray(list)?list.filter(p=>typeof p==='string'&&p):[];
+}
+function isExcludedMount(mount,excl){
+  if(mount==='/')return false;
+  return excl.some(p=>{
+    const base=p.length>1&&p.endsWith('/')?p.slice(0,-1):p;
+    return mount===base||mount.startsWith(base+'/');
+  });
+}
+/* Данные структурные (список томов и массивов) — перерисовываем разметку
+   только когда состав изменился, значения (проценты) обновляем на месте,
+   чтобы полоски не дёргались и DOM не пересобирался каждые 2 секунды. */
+function fillList(box,items,htmlFn,syncFn,sigFn){
+  if(!box)return false;
+  const sig=items.map(sigFn).join('|');
+  let changed=false;
+  if(box.dataset.sig!==sig){
+    box.innerHTML=items.map(htmlFn).join('');
+    box.dataset.sig=sig;
+    changed=true;
+  }
+  items.forEach((it,i)=>syncFn(box.children[i],it));
+  return changed;
+}
+function renderStorage(d){
+  const headD=document.querySelector('[data-storage-head]');
+  const headR=document.querySelector('[data-raid-head]');
+  const boxD=document.querySelector('[data-disk-list]');
+  const boxR=document.querySelector('[data-raid-list]');
+  if(!boxD)return false;
+
+  let disks=Array.isArray(d.disks)?d.disks.slice():[];
+  // «попутные» разделы (/boot, /boot/efi, /recovery …) в панели не нужны
+  const excl=excludedMounts();
+  if(excl.length)disks=disks.filter(dr=>!isExcludedMount(dr.mount,excl));
+  // запасной вариант — старый сервер отдаёт только сводный процент по /
+  if(!disks.length&&d.disk_used!=null){
+    disks=[{mount:'/',device:'',fstype:'',used:d.disk_used,
+            total_gb:d.disk_total_gb,free_gb:null}];
+  }
+  const raid=Array.isArray(d.raid)?d.raid.slice():[];
+
+  if(headD)headD.hidden=!disks.length;
+  if(headR)headR.hidden=!raid.length;
+  const cD=document.querySelector('[data-storage-count]');
+  if(cD)cD.textContent=disks.length?(disks.length+(disks.length===1?' disk':' disks')):'';
+  const cR=document.querySelector('[data-raid-count]');
+  if(cR)cR.textContent=raid.length?(raid.length+(raid.length===1?' array':' arrays')):'';
+
+  const a=fillList(boxD,disks,diskRowHtml,syncDiskRow,
+                   dr=>dr.mount+'|'+dr.device+'|'+dr.fstype);
+  const b=fillList(boxR,raid,raidRowHtml,syncRaidRow,
+                   r=>r.name+'|'+r.level+'|'+(r.components||[]).map(c=>c.device).join(','));
+  return a||b;   // true — состав изменился, окно нужно переставить
+}
+function setMonitorState(down){
+  const win=document.getElementById('winMonitor');
+  if(!win)return;
+  win.classList.toggle('monitor-offline',!!down);
+  const st=document.querySelector('[data-monitor-status]');
+  if(st)st.textContent=down?'N/A — host unreachable':'Online';
+  if(down){
+    ['cpu','ram','load'].forEach(n=>setMetric(n,0,'—'));
+    document.querySelectorAll('.srow-val').forEach(el=>{el.textContent='—'});
+    const up=document.querySelector('[data-monitor-uptime]');
+    if(up)up.textContent='';
+  }
+}
+function renderMonitor(d){
+  d=d||{};
+  const cores=Number(d.cores)||1;
+  const load=Number(d.load1);
+  setMetric('cpu',d.cpu,fmtPct(d.cpu));
+  setMetric('ram',d.mem_used,fmtPct(d.mem_used));
+  setMetric('load',isFinite(load)?(load/cores)*100:0,isFinite(load)?load.toFixed(2):'—');
+  const storageChanged=renderStorage(d);
+  const up=document.querySelector('[data-monitor-uptime]');
+  if(up)up.textContent=d.uptime?('up '+d.uptime):'';
+  // состав дисков изменился — окно под новый размер контента
+  if(storageChanged)placeMonitor();
+}
+async function pollMonitor(){
+  const cfg=monitorConfig();
+  if(cfg.enabled===false||monitorHidden()||monitorBusy)return;
+  monitorBusy=true;
+  const ctl=('AbortController'in window)?new AbortController():null;
+  const to=setTimeout(()=>{try{ctl&&ctl.abort()}catch(e){}},Math.max(500,Number(cfg.timeout)||2500));
+  try{
+    const res=await fetch(cfg.endpoint||'/api/stats',{cache:'no-store',signal:ctl?ctl.signal:undefined});
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const data=await res.json();
+    renderMonitor(data);
+    setMonitorState(false);
+  }catch(err){
+    setMonitorState(true);
+  }finally{
+    clearTimeout(to);
+    monitorBusy=false;
+  }
+}
+function startMonitor(){
+  const cfg=monitorConfig();
+  if(cfg.enabled===false)return;
+  if(monitorTimer)clearInterval(monitorTimer);
+  monitorTimer=setInterval(pollMonitor,Math.max(600,Number(cfg.interval)||2000));
+  pollMonitor();
+}
+/* Узкое окно — плотная раскладка строк метрик. */
+(function monitorDensity(){
+  const mon=document.getElementById('winMonitor');
+  if(!mon)return;
+  const body=mon.querySelector('.monitor-body');
+  if(!body)return;
+  const apply=()=>body.classList.toggle('compact',mon.offsetWidth<300);
+  if('ResizeObserver'in window)new ResizeObserver(apply).observe(mon);
+  window.addEventListener('resize',apply);
+  apply();
+})();
+
+(async function initLayout(){
+  layoutWindows(true);
+  focusWindow(document.getElementById('winServers'));
+  fitAscii();
+  startMonitor();
+  // содержимое окна — из папки pics/: сначала арт, потом картинка из конфига
+  try{await loadArt();await initPicture();}catch(e){}
+  /* арт подогнан под содержимое — расставляем окна окончательно: иначе
+     размер System Monitor (он встаёт в свободное место рядом с артом)
+     зависит от того, успела ли картинка загрузиться, и на каждой загрузке
+     окно получало бы разную высоту */
+  layoutWindows(true);
+  // раскладка с сервера применяется последней — поверх авто-расстановки
+  if(CONFIG.rememberLayout!==false){
+    savedLayout=await loadSavedLayout();
+    if(savedLayout)applySavedLayout(savedLayout);
+  }
+  layoutReady=true;                 // дальше изменения можно сохранять
+  syncLayoutPalette();
+})();
+</script>
+</body>
+</html>

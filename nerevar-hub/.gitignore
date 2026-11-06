@@ -1,0 +1,23 @@
+# создаётся server.py в момент запуска
+server.pid
+
+# сохранённая раскладка окон панели (POST /api/layout) — личные данные
+layout.json
+layout.json.tmp
+
+# свои треки и скины в репозиторий не кладём: это чужие файлы и личный
+# контент. Лежат локально, в git идут только README.md этих папок.
+music/*
+!music/README.md
+skins/*
+!skins/README.md
+pics/*
+!pics/README.md
+
+# служебные файлы ОС
+.DS_Store
+Thumbs.db
+
+# служебные Python
+__pycache__/
+*.pyc
