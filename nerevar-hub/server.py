@@ -84,6 +84,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 import sys
 import mimetypes
 import threading
@@ -573,6 +574,142 @@ def list_skins(skins_dir):
     return out
 
 
+# --- шрифты, установленные в системе ---------------------------------------
+# Панель берёт шрифт и из конфига, и из системы. В Linux за системные
+# шрифты отвечает fontconfig: `fc-list --format='%{family}\n'` отдаёт все
+# установленные семейства за пару миллисекунд. Если утилиты нет
+# (минимальный дистрибутив, контейнер, NAS, Windows) — обходим обычные
+# шрифтовые папки и читаем имя семейства прямо из таблицы name файла
+# TTF/OTF: библиотек не нужно, формат открытый и стабильный с1990-х.
+FONT_DIRS = (
+    "/usr/share/fonts",
+    "/usr/local/share/fonts",
+    os.path.join(os.environ.get("XDG_DATA_HOME")
+                 or os.path.expanduser("~/.local/share"), "fonts"),
+    os.path.expanduser("~/.fonts"),
+)
+FONT_EXTS = (".ttf", ".otf", ".ttc", ".otc")
+FONT_CACHE_TTL = 300        # секунд: шрифты ставят редко
+_FONT_CACHE = {"at": 0.0, "data": None}
+
+
+def _u16be(buf, i):
+    return (buf[i] << 8) | buf[i + 1]
+
+
+def _u32be(buf, i):
+    return (buf[i] << 24) | (buf[i + 1] << 16) | (buf[i + 2] << 8) | buf[i + 3]
+
+
+def font_family_of(path):
+    """Семейство шрифта из таблицы name файла TTF/OTF/TTC, либо None.
+
+    Читаются только заголовок, таблица таблиц и сама name — файл целиком
+    в память не попадает (шрифт может весить десятки мегабайт)."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(12)
+            if len(head) < 12:
+                return None
+            if head[:4] == b"ttcf":                 # коллекция: первый шрифт
+                fh.seek(_u32be(head, 8))
+                head = fh.read(12)
+                if len(head) < 12:
+                    return None
+            if head[:4] not in (b"\x00\x01\x00\x00", b"OTTO", b"true"):
+                return None                        # wOFF и прочее не читаем
+            tables = _u16be(head, 4)
+            if not 0 < tables <= 4096:
+                return None
+            blob = fh.read(tables * 16)
+            if len(blob) < tables * 16:
+                return None
+            name_off = name_len = 0
+            for i in range(tables):
+                o = i * 16
+                if blob[o:o + 4] == b"name":
+                    name_off, name_len = _u32be(blob, o + 8), _u32be(blob, o + 12)
+                    break
+            if not name_off or not name_len or name_len > 1 << 20:
+                return None
+            fh.seek(name_off)
+            data = fh.read(name_len)
+            if len(data) < 6:
+                return None
+            count, str_off = _u16be(data, 2), _u16be(data, 4)
+            best = None                             # (приоритет, имя)
+            for i in range(count):
+                o = 6 + i * 12
+                if o + 12 > len(data):
+                    break
+                platform = _u16be(data, o)
+                name_id = _u16be(data, o + 6)
+                length, offset = _u16be(data, o + 8), _u16be(data, o + 10)
+                if name_id not in (1, 16):          # 16 — «typographic family»
+                    continue
+                start = str_off + offset
+                if start + length > len(data):
+                    continue
+                raw = data[start:start + length]
+                if platform in (0, 3):              # Unicode / Windows: UTF-16BE
+                    try:
+                        text = raw.decode("utf-16-be")
+                    except UnicodeDecodeError:
+                        continue
+                elif platform == 1:                 # Mac Roman
+                    text = raw.decode("mac_roman", "replace")
+                else:
+                    continue
+                text = text.strip()
+                if text and (best is None or name_id == 16):
+                    best = (name_id, text)
+            return best[1] if best else None
+    except OSError:
+        return None
+
+
+def list_fonts():
+    """Семейства шрифтов, установленных в системе.
+
+    Сначала пробуем fontconfig (fc-list) — он видит и системные папки, и
+    пользовательские, и свои настройки. Нет утилиты — обходим FONT_DIRS и
+    разбираем файлы сами. Результат кэшируется на FONT_CACHE_TTL секунд:
+    шрифты меняются редко, а запрос к странице не должен ждать."""
+    now = time.time()
+    cached = _FONT_CACHE["data"]
+    if cached is not None and now - _FONT_CACHE["at"] < FONT_CACHE_TTL:
+        return cached
+    families, source = set(), "scan"
+    try:
+        proc = subprocess.run(
+            ["fc-list", "--format=%{family}\n"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=10, check=False)
+        if proc.returncode == 0:
+            for line in proc.stdout.decode("utf-8", "replace").splitlines():
+                for family in line.split(","):      # у одного файла бывает
+                    family = family.strip()         # несколько семейств
+                    if family:
+                        families.add(family)
+            source = "fontconfig"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if source != "fontconfig":
+        for directory in FONT_DIRS:
+            for root, _dirs, files in os.walk(directory):
+                for name in sorted(files):
+                    if len(families) > 5000:        # защита от чужих папок
+                        break
+                    if os.path.splitext(name)[1].lower() not in FONT_EXTS:
+                        continue
+                    family = font_family_of(os.path.join(root, name))
+                    if family:
+                        families.add(family)
+    data = {"families": sorted(families, key=str.lower), "source": source}
+    _FONT_CACHE.update(at=now, data=data)
+    return data
+
+
 # --------------------------------------------------------------------------- #
 #  HTTP
 # --------------------------------------------------------------------------- #
@@ -652,6 +789,11 @@ def make_handler(index_path, metrics, allow_cors, pics_dir=None, music_dir=None,
                            {"Cache-Control": "no-store"})
             elif path == "/api/skins":
                 payload = json.dumps({"skins": list_skins(skins_dir)})
+                self._send(200, payload, "application/json; charset=utf-8",
+                           {"Cache-Control": "no-store"})
+            elif path == "/api/fonts":
+                # какие шрифты есть в системе — для View → Font…
+                payload = json.dumps(list_fonts())
                 self._send(200, payload, "application/json; charset=utf-8",
                            {"Cache-Control": "no-store"})
             elif path == "/api/layout":

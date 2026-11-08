@@ -13,6 +13,9 @@ skins/*
 !skins/README.md
 pics/*
 !pics/README.md
+# ascii-арт — штатное содержимое панели, он должен быть в репозитории,
+# иначе после клонирования Picture Viewer покажет «Cannot open»
+!pics/ASCII_ART.TXT
 
 # служебные файлы ОС
 .DS_Store

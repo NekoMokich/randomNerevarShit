@@ -54,6 +54,23 @@
                            синие и оранжевые шкалы — как панель выглядит
                            при включённом Dark Reader. То же переключается
                            кнопкой «Dark theme» во вкладке View.
+      19. font           — строка font-family для всего интерфейса: имя
+                           шрифта, установленного в системе, либо весь
+                           список через запятую, как в CSS. Пустая строка —
+                           шрифт по умолчанию. Список того, что реально
+                           стоит на машине, отдаёт server.py (GET /api/fonts:
+                           в Linux это fontconfig, «fc-list»), и панель сама
+                           показывает его в View → Font… с предпросмотром.
+                           Там же шрифт выбирается на лету — выбор важнее
+                           этого поля и хранится как тема.
+      20. viewers         — сколько окон Picture Viewer открывать (1..6,
+                           по умолчанию 2). Окна независимы: своё фото, свой
+                           зум, свой режим арт/картинка. В любом окне фото
+                           меняется через File → Open image… — диалог идёт
+                           в последнее активное окно и подпишет, в какое.
+                           Содержимое общее: CONFIG.artFile и CONFIG.picFile,
+                           а при '~' каждое окно при загрузке выбирает свою
+                           случайную картинку.
 
   ========================================================================== */
 /* ==========================================================================
@@ -73,6 +90,12 @@ window.CONFIG={
                                // или '~.png' / '~.jpg' / '~.gif' / '~' —
                                // случайная картинка из pics/ при каждой
                                // загрузке страницы; '' — показывать арт
+ viewers:2,                    // сколько окон Picture Viewer (1..6): каждое
+                               // живёт своей жизнью — своё фото, свой зум,
+                               // свой режим арт/картинка. Содержимое общее
+                               // (artFile/picFile выше): при '~' каждое окно
+                               // при загрузке выбирает СВОЮ случайную
+                               // картинку, независимо от остальных.
  artIcon:'P',
  numberStyle:'title',
   // --- Тема оформления ----------------------------------------------------
@@ -85,6 +108,19 @@ window.CONFIG={
   // одинаков на всех устройствах и важнее этого поля. «View → Reset window
   // layout» забывает выбор и возвращает тему, заданную здесь.
   theme:'dark',
+  // --- Шрифт интерфейса ----------------------------------------------------
+  // Строка font-family, которой набрана вся панель (арт и окно плеера —
+  // моноширинные, их эта настройка не трогает):
+  //   ''                                  — шрифт по умолчанию (Tahoma,
+  //                                         Verdana, sans-serif)
+  //   'DejaVu Sans'                       — конкретный шрифт из системы
+  //   'Noto Sans, DejaVu Sans, sans-serif'— список через запятую, как в CSS
+  // Какие шрифты стоят на машине, смотрите в View → Font… (панель поднимает
+  // их сама: server.py отдаёт GET /api/fonts — fontconfig/fc-list, а без
+  // утилиты сам обходит папки и читает имена из файлов TTF/OTF). Выбор в этом
+  // диалоге важнее этого поля, хранится как тема, а «View → Reset window
+  // layout» забывает его и возвращает шрифт, заданный здесь.
+  font:'Tahoma, Verdana, sans-serif',
   // Запоминать раскладку панели (View → Layout constructor…): какие окна
   // открыты, их положение и размер, порядок, какие карточки services
   // показывать. Раскладка лежит на сервере (layout.json, общий для всех
@@ -167,12 +203,14 @@ window.CONFIG={
    'The ASCII art is not stored in the page &mdash; its name lives in <code>config.js</code> (<code>CONFIG.artFile</code>, by default <code>ASCII_ART.TXT</code>) and the file is read from the <code>pics/</code> folder. Drop your own <code>.txt</code> into <code>pics/</code> and point <code>CONFIG.artFile</code> at it; the page itself needs no edits.',
    'The Picture Viewer also shows pictures: <b>File &rarr; Open image&hellip;</b> opens one by URL or with <b>Browse&hellip;</b>, or just drop a file onto the window. PNG, JPG, WEBP, SVG and animated GIF (the animation runs as-is) are supported. The picture is fitted into the window without distortion and the window takes its proportions; <b>File &rarr; Back to ASCII art</b> brings the art back.',
    'Which picture opens on start is set by <code>CONFIG.picFile</code>: <code>cat.png</code> — a specific file from <code>pics/</code>, <code>~.png</code> / <code>~.gif</code> / <code>~</code> — a <b>random</b> picture of that extension picked from <code>pics/</code> on every page load (the file list comes from <code>/api/pics</code>), empty — stay on the ASCII art.',
+   'Several Picture Viewer windows can be open at once &mdash; <code>CONFIG.viewers</code> sets how many (1&ndash;6, default 2). They do not depend on each other: every window keeps its own picture, its own zoom and its own art/image mode. <code>File &rarr; Open image&hellip;</code> sends the picture to the viewer you focused last and the dialog says which one. Content comes from the same settings for all of them, and with <code>~</code> each window picks <b>its own</b> random picture on every load.',
    'The <b>System Monitor</b> window polls <code>/api/stats</code> (served by <code>server.py</code>) and shows CPU, RAM and Load, a <b>Storage</b> section with every mounted volume, and a <b>RAID</b> section with every array from <code>/proc/mdstat</code> (level, size, state, member disks). When the server is down it shows &laquo;N/A &mdash; host unreachable&raquo;.',
    'The <b>Audio Player</b> (<b>File &rarr; Audio player</b>) streams music from <code>CONFIG.music.base</code> — the <code>music/</code> folder served by <code>server.py</code> (track list from <code>/api/music</code>) or any URL. Transport buttons, seek, volume, <b>S</b> (shuffle) and <b>R</b> (repeat), clickable track list. If a track shows &laquo;unsupported or damaged audio file&raquo;, the browser cannot decode that file (for example, some FLAC files with broken cover art are rejected by Chromium &mdash; <code>metaflac --remove --block-type=PICTURE file.flac</code> repairs them).',
    'The player can look like a real Winamp/Qmmp window: put a <code>.wsz</code> skin (a ZIP with <code>main.bmp</code>, <code>cbuttons.bmp</code>, <code>pledit.bmp</code>&hellip;) into the <code>skins/</code> folder and choose it from the list, press <b>Skin&hellip;</b> to load one from this computer, or drop a skin file onto the window. Everything is parsed in the browser &mdash; nothing is uploaded. Size and playlist height &mdash; <code>CONFIG.music.skins.scale</code> and <code>playlistHeight</code>.',
    'Windows can be dragged by the title bar and resized from the bottom-right corner.',
    '<b>View &rarr; Layout constructor&hellip;</b> decides how the panel opens: tick the windows you want open, tick the <b>Available services</b> cards you need, arrange everything by dragging, then press <b>Save layout</b>. The layout is stored on the server (<code>layout.json</code> via <code>/api/layout</code>) so every device opens the panel exactly the way you arranged it. <b>Reset window layout</b> returns the default placement; <code>CONFIG.rememberLayout = false</code> in <code>config.js</code> switches the memory off completely.',
    'The panel has two looks: the classic light one and a <b>dark</b> one (teal desktop, near-black window bodies, dark-blue title bars, light-blue headings, white text, blue and orange gauges &mdash; the way it appears with the Dark Reader extension on). Set <code>CONFIG.theme = &quot;dark&quot;</code> in <code>config.js</code>, or press <b>Dark theme</b> in the <b>View</b> menu to switch at once: the button remembers the choice in this browser and travels with the layout on the server, so every device opens in the same theme. <b>Reset window layout</b> forgets the choice and returns the theme set in <code>config.js</code>.',
+   'The whole interface is set in the font from <code>CONFIG.font</code> in <code>config.js</code> &mdash; a family installed on the machine, or a full CSS stack such as <code>&quot;Noto Sans, DejaVu Sans, sans-serif&quot;</code> (an empty value keeps the default). <b>View &rarr; Font&hellip;</b> lists every font that is actually installed: server.py collects them from the system (fontconfig &mdash; <code>fc-list</code> &mdash; or, without that utility, by reading the font folders itself), each name is drawn in its own face so you see it before choosing, and the search box filters the list &mdash; type a name that is not on the list and press Enter to use it anyway. The choice is remembered like the theme and travels with the layout; <b>Reset window layout</b> returns to <code>CONFIG.font</code>. The ASCII art window and the player keep their own monospace fonts.',
    'The taskbar <b>clock</b> is two lines: the time on top, the date <code>Mo/Nov/2/2026</code> under it (two-letter weekday, three-letter month). Both are visible at every screen width. Click it to open a calendar &mdash; month view, <b>Today</b> button, closes on Esc or a click anywhere else.'
   ]
  }

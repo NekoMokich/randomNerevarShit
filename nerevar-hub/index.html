@@ -9,7 +9,8 @@
     config.js             — ВСЕ настройки: имя сервера, адреса, сервисы,
                             System Monitor, аудио-плеер, скины, Help
     server.py             — локальный сервер: раздаёт панель, метрики,
-                            картинки, музыку и скины
+                            картинки, музыку, скины и список шрифтов,
+                            стоящих в системе
     nerevar-hub.service   — unit для systemd (автозапуск)
 
   БЫСТРЫЙ СТАРТ НА СЕРВЕРЕ
@@ -48,6 +49,23 @@
     (layout.json), поэтому он одинаков на всех устройствах.
     «View → Reset window layout» забывает выбор и возвращает тему,
     заданную в config.js.
+
+  ШРИФТ ИНТЕРФЕЙСА — ИЗ КОНФИГА И ИЗ СИСТЕМЫ
+  -------------------------------------------
+    CONFIG.font в config.js — строка font-family, как в CSS:
+        'Tahoma, Verdana, sans-serif' — шрифт по умолчанию
+        'DejaVu Sans'                 — шрифт, стоящий в системе
+        ''                            — пусто, тоже по умолчанию
+    Панель сама поднимает список установленных в системе шрифтов:
+    server.py отдаёт GET /api/fonts (в Linux их считает fontconfig —
+    «fc-list»; утилиты нет — server.py обходит шрифтовые папки сам
+    и читает имена из файлов TTF/OTF). «View → Font…» показывает этот
+    список: каждое имя — своим начертанием, строка поиска фильтрует,
+    Enter применяет имя, которого в списке нет.
+    Выбор в диалоге важнее CONFIG.font, хранится как тема (браузер +
+    layout.json), а «View → Reset window layout» возвращает шрифт,
+    заданный в config.js. Арт-окно и плеер — моноширинные, их поле
+    font не трогает.
 
   CONFIG.monitor — МЕТРИКИ СЕРВЕРА
   -------------------------------
@@ -217,6 +235,34 @@
     Папка pics/ — единственное место, где лежит содержимое Picture
     Viewer: и картинки, и ascii-арт. В config.js — только имена.
 
+  НЕСКОЛЬКО ОКОН PICTURE VIEWER
+  -----------------------------
+    Сколько окон Picture Viewer открывать — решает CONFIG.viewers
+    (1..6, по умолчанию 2). В разметке окно одно (#winArt) — оно же
+    шаблон: остальные копируются при загрузке страницы, поэтому в
+    таскбаре, в конструкторе раскладки и в /api/layout новые окна
+    появляются сами, index.html для этого править не нужно.
+    Окна не зависят друг от друга: своё фото (File → Open image… или
+    перетаскивание файла прямо на окно), свой зум (View → Zoom), свой
+    режим «арт/картинка» и своё имя в заголовке — Picture Viewer,
+    Picture Viewer 2, …
+    Диалог открытия один на все окна, но адресат у него один —
+    последнее активное окно; подпись «Opens in …» прямо в диалоге
+    говорит, куда картинка попадёт.
+    Содержимое общее: CONFIG.artFile и CONFIG.picFile читаются всеми
+    окнами, а при '~' каждое окно при загрузке тянет своё число
+    случайности и выбирает СВОЮ случайную картинку.
+    Окна делят свободную колонку на доли: в широком окне встают в ряд
+    по низу, на узком экране — друг под другом. Закрытое окно места не
+    занимает, а ручное перетаскивание действует только на своё окно.
+    Авто-окна при этом объезжают перетащенные руками: если их доля
+    попадает на чужое ручное окно или на окно Server, они уезжают на
+    ближайшее свободное место. Если свободного места нет вовсе — на
+    узком экране, где окно Server занимает всю высоту, — просмотрщики
+    перераскладываются заново и ужимаются под экран, только бы не
+    налезать друг на друга. Намеренную «стопку» окон, заданную в
+    раскладке, такое вмешательство не трогает.
+
   ==========================================================================
 -->
 <!doctype html>
@@ -228,7 +274,9 @@
 <style>
 /* Цвета панели — все через переменные: светлая тема ниже (значения как были),
    тёмная — блок html[data-theme=dark] в конце этого же style. */
-:root{--desktop:#008080;--gray:#c0c0c0;--light:#fff;--mid:#dfdfdf;--dark:#808080;--black:#222;--blue:#000080;--navy:#000060;
+/* --ui-font: шрифт интерфейса; меняют CONFIG.font и View → Font…
+      (арт и окно плеера моноширинные — их настройка не трогает) */
+:root{--ui-font:Tahoma,Verdana,sans-serif;--desktop:#008080;--gray:#c0c0c0;--light:#fff;--mid:#dfdfdf;--dark:#808080;--black:#222;--blue:#000080;--navy:#000060;
  --edge:#fff;--blue-2:#1084d0;
  --text:#111;--text-2:#333;--text-3:#222;--text-strong:#000;
  --dim:#444;--dim-2:#555;--dim-3:#666;--dim-4:#777;--dim-5:#888;--muted:#a0a0a0;--dot:#000;
@@ -240,7 +288,7 @@
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html,body{height:100%}
-body{margin:0;font-family:Tahoma,Verdana,sans-serif;font-size:13px;color:var(--text);background:var(--desktop);overflow:hidden}
+body{margin:0;font-family:var(--ui-font);font-size:13px;color:var(--text);background:var(--desktop);overflow:hidden}
 .scene{position:absolute;top:0;left:0;right:0;bottom:36px;overflow:hidden}
 .window{background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005}
 .appwindow{position:absolute;display:flex;flex-direction:column;min-width:260px;min-height:160px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005;overflow:visible}
@@ -250,11 +298,11 @@ body{margin:0;font-family:Tahoma,Verdana,sans-serif;font-size:13px;color:var(--t
 .art-body{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;overflow:hidden;padding:10px}
 .resize-grip{position:absolute;right:1px;bottom:1px;width:16px;height:16px;cursor:nwse-resize;touch-action:none;z-index:10;background-image:linear-gradient(135deg,transparent 0 40%,var(--dark) 40% 48%,transparent 48% 58%,var(--dark) 58% 66%,transparent 66% 76%,var(--dark) 76% 84%,transparent 84%);user-select:none}
 .taskbar{position:absolute;left:0;right:0;bottom:0;height:36px;display:flex;align-items:center;gap:6px;padding:4px 6px;background:var(--gray);border-top:2px solid var(--light);z-index:500}
-.task{display:flex;align-items:center;gap:7px;min-width:150px;max-width:210px;text-align:left;background:var(--gray);border:2px outset var(--edge);padding:5px 9px;font:12px Tahoma,Verdana,sans-serif;color:var(--text);cursor:default;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.task{display:flex;align-items:center;gap:7px;min-width:150px;max-width:210px;text-align:left;background:var(--gray);border:2px outset var(--edge);padding:5px 9px;font:12px var(--ui-font);color:var(--text);cursor:default;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .task.active{border-style:inset;background:var(--active);font-weight:bold}
-.task .ticon{width:16px;height:16px;background:var(--gray);border:1px solid var(--dark);display:grid;place-items:center;font:bold 10px Tahoma;color:var(--heading);flex:0 0 auto}
+.task .ticon{width:16px;height:16px;background:var(--gray);border:1px solid var(--dark);display:grid;place-items:center;font:bold 10px var(--ui-font);color:var(--heading);flex:0 0 auto}
 .taskbar .spacer{flex:1}
-.taskbar .clock{border:2px inset var(--edge);padding:1px 9px;font:11px Tahoma,sans-serif;color:var(--dim);text-align:center;cursor:default;-webkit-user-select:none;user-select:none;display:flex;flex-direction:column;gap:0;align-items:center;justify-content:center;white-space:nowrap;line-height:1.12}
+.taskbar .clock{border:2px inset var(--edge);padding:1px 9px;font:11px var(--ui-font);color:var(--dim);text-align:center;cursor:default;-webkit-user-select:none;user-select:none;display:flex;flex-direction:column;gap:0;align-items:center;justify-content:center;white-space:nowrap;line-height:1.12}
 /* время — сверху, крупнее и темнее; дата — под ним, чуть мельче */
 .taskbar .clock .ctime{color:var(--text);font-size:11px}
 .taskbar .clock .cdate{color:var(--dim);font-size:10px}
@@ -263,23 +311,23 @@ body{margin:0;font-family:Tahoma,Verdana,sans-serif;font-size:13px;color:var(--t
 .calpop{position:absolute;right:8px;bottom:42px;width:216px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005;z-index:600}
 .calpop[hidden]{display:none}
 .cal-head{display:flex;align-items:center;gap:3px;background:linear-gradient(90deg,var(--blue),var(--blue-2));color:#fff;padding:3px 4px}
-.cal-title{flex:1;text-align:center;font:bold 11px Tahoma,sans-serif;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.cal-nav{width:21px;height:19px;background:var(--gray);border:2px outset var(--edge);font:9px Tahoma,sans-serif;color:var(--text);display:grid;place-items:center;padding:0;cursor:default}
+.cal-title{flex:1;text-align:center;font:bold 11px var(--ui-font);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cal-nav{width:21px;height:19px;background:var(--gray);border:2px outset var(--edge);font:9px var(--ui-font);color:var(--text);display:grid;place-items:center;padding:0;cursor:default}
 .cal-nav:active{border-style:inset}
 .cal-grid{width:100%;table-layout:fixed;border-collapse:collapse;margin-top:4px;background:var(--surface);border:2px inset var(--edge)}
-.cal-grid th{font:bold 10px Tahoma,sans-serif;color:var(--heading);background:var(--gray);border:1px solid var(--dark);padding:3px 0}
-.cal-grid td{font:11px Tahoma,sans-serif;text-align:center;padding:4px 0;color:var(--text);cursor:default}
+.cal-grid th{font:bold 10px var(--ui-font);color:var(--heading);background:var(--gray);border:1px solid var(--dark);padding:3px 0}
+.cal-grid td{font:11px var(--ui-font);text-align:center;padding:4px 0;color:var(--text);cursor:default}
 .cal-grid td.muted{color:var(--muted)}
 .cal-grid td:not(.muted):hover{background:var(--blue);color:#fff}
 .cal-grid td.today{font-weight:bold;outline:1px dotted var(--dot);outline-offset:-3px}
 .cal-grid td.sel{background:var(--blue);color:#fff;font-weight:bold}
 .cal-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:4px}
-.cal-date{font:10px Tahoma,sans-serif;color:var(--dim);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.cal-btn{background:var(--gray);border:2px outset var(--edge);font:11px Tahoma,sans-serif;padding:3px 9px;color:var(--text);cursor:default}
+.cal-date{font:10px var(--ui-font);color:var(--dim);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cal-btn{background:var(--gray);border:2px outset var(--edge);font:11px var(--ui-font);padding:3px 9px;color:var(--text);cursor:default}
 .cal-btn:active{border-style:inset}
 .titlebar{height:30px;background:linear-gradient(90deg,var(--blue),var(--blue-2));color:#fff;display:flex;align-items:center;justify-content:space-between;padding:3px 5px 3px 9px;font-weight:bold;letter-spacing:.1px}
 .titleleft{display:flex;align-items:center;gap:8px}.appicon{width:18px;height:18px;background:var(--gray);border:2px outset var(--edge);display:grid;place-items:center;color:var(--heading);font-weight:bold;font-size:11px}
-.window-controls{display:flex;gap:3px}.winbtn{width:22px;height:20px;background:var(--gray);border:2px outset var(--edge);display:grid;place-items:center;font:bold 12px Tahoma;color:var(--text);line-height:1}
+.window-controls{display:flex;gap:3px}.winbtn{width:22px;height:20px;background:var(--gray);border:2px outset var(--edge);display:grid;place-items:center;font:bold 12px var(--ui-font);color:var(--text);line-height:1}
 .menubar{display:flex;gap:6px;padding:4px 6px;position:relative;z-index:60}
 .menuitem{position:relative;padding:5px 10px;border:2px solid transparent;cursor:default;user-select:none;white-space:nowrap;line-height:1.1}
 .menuitem:first-letter{text-decoration:underline}
@@ -287,17 +335,17 @@ body{margin:0;font-family:Tahoma,Verdana,sans-serif;font-size:13px;color:var(--t
 .menuitem.open,.menuitem:active{border-color:var(--dark) var(--light) var(--light) var(--dark);background:var(--active-2)}
 .menu{display:none;position:absolute;top:100%;left:0;min-width:190px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);box-shadow:2px 2px 0 #0004;padding:3px;z-index:100}
 .menuitem.open .menu{display:block}
-.menu button{display:flex;align-items:center;justify-content:space-between;gap:18px;width:100%;text-align:left;background:transparent;border:0;font:12px Tahoma,Verdana,sans-serif;color:var(--text);padding:5px 9px;cursor:default}
+.menu button{display:flex;align-items:center;justify-content:space-between;gap:18px;width:100%;text-align:left;background:transparent;border:0;font:12px var(--ui-font);color:var(--text);padding:5px 9px;cursor:default}
 .menu button:hover{background:var(--blue);color:#fff}
 .menu button .sc{color:var(--dim-3);font-size:11px}
 .menu button:hover .sc{color:#cfe0ff}
 .menu .sep{height:1px;margin:4px;background:var(--dark);border-bottom:1px solid var(--light)}
 .content{border:2px inset var(--edge);padding:18px;background:var(--gray)}
 .welcome{border:2px inset var(--edge);background:var(--surface-2);padding:12px 13px;margin-bottom:14px}.welcome h1{font-size:21px;margin:0 0 7px;font-weight:bold;color:var(--heading)}.welcome p{margin:0;line-height:1.45;color:var(--text-2)}
-.hosts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:15px}.field label{display:block;font-size:11px;font-weight:bold;margin:0 0 5px}.field input{width:100%;min-width:0;padding:6px 7px;background:var(--surface);border:2px inset var(--edge);border-radius:0;font:12px Tahoma, sans-serif;color:var(--text);outline-color:var(--heading)}
+.hosts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:15px}.field label{display:block;font-size:11px;font-weight:bold;margin:0 0 5px}.field input{width:100%;min-width:0;padding:6px 7px;background:var(--surface);border:2px inset var(--edge);border-radius:0;font:12px var(--ui-font);color:var(--text);outline-color:var(--heading)}
 .group-title{font-weight:bold;background:var(--blue);color:#fff;padding:6px 8px;margin-bottom:9px}
-.services{display:grid;gap:9px}.service{display:grid;grid-template-columns:37px minmax(0,1fr);gap:10px;align-items:start;background:var(--card);border:2px outset var(--edge);padding:10px}.iconbox{width:35px;height:35px;border:2px inset var(--edge);background:var(--surface-2);display:grid;place-items:center;font-size:19px;line-height:1;color:var(--heading);font-weight:bold;font-family:"Segoe UI Emoji","Noto Color Emoji","Apple Color Emoji",Tahoma,sans-serif}
-.iconbox.is-number{font-family:Tahoma,Verdana,sans-serif;font-size:14px;line-height:1}
+.services{display:grid;gap:9px}.service{display:grid;grid-template-columns:37px minmax(0,1fr);gap:10px;align-items:start;background:var(--card);border:2px outset var(--edge);padding:10px}.iconbox{width:35px;height:35px;border:2px inset var(--edge);background:var(--surface-2);display:grid;place-items:center;font-size:19px;line-height:1;color:var(--heading);font-weight:bold;font-family:"Segoe UI Emoji","Noto Color Emoji","Apple Color Emoji",var(--ui-font)}
+.iconbox.is-number{font-family:var(--ui-font);font-size:14px;line-height:1}
 body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14px;font-weight:bold;color:var(--heading);margin:0 0 4px}.service p{font-size:11px;color:var(--dim);margin:0 0 9px}.actions{display:flex;gap:7px;flex-wrap:wrap}.actions a{display:inline-block;text-align:center;text-decoration:none;color:var(--text);background:var(--gray);border:2px outset var(--edge);padding:6px 9px;font-size:11px;min-width:76px}.actions a:active{border-style:inset;padding:7px 8px 5px 10px}.actions a:hover{background:var(--hover)}
 .art-stage{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#2b2b2b;border:2px inset #7a7a7a;box-shadow:inset 0 0 0 1px #1c1c1c}
 .art-wrap{display:inline-flex;align-items:center;justify-content:center;overflow:hidden;padding:10px;max-width:100%}pre{font-family:"DejaVu Sans Mono","Noto Sans Mono",monospace;font-size:11px;line-height:1.05;color:#e8e8e8;white-space:pre;margin:0;max-width:none;font-weight:500;flex-shrink:0}
@@ -307,20 +355,20 @@ body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14
 .monitor-body{display:flex;flex-direction:column;padding:12px;overflow-y:auto;overflow-x:hidden}
 .monitor-inner{display:flex;flex-direction:column;gap:9px;margin:auto 0}
 .metric{display:grid;grid-template-columns:56px minmax(0,1fr) 78px;gap:8px;align-items:center}
-.metric-label{font:bold 11px Tahoma,sans-serif;color:var(--heading);letter-spacing:.2px}
+.metric-label{font:bold 11px var(--ui-font);color:var(--heading);letter-spacing:.2px}
 .gauge{height:17px;background:var(--surface);border:2px inset var(--edge);overflow:hidden;flex:0 0 auto}
 .gauge-fill{height:100%;width:0;background:repeating-linear-gradient(90deg,var(--blue) 0 9px,var(--surface) 9px 12px);transition:width .35s linear}
-.metric-value{font:11px Tahoma,sans-serif;color:var(--text-3);text-align:center;background:var(--surface);border:2px inset var(--edge);padding:4px 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.metric-value{font:11px var(--ui-font);color:var(--text-3);text-align:center;background:var(--surface);border:2px inset var(--edge);padding:4px 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* заголовок раздела (Storage / RAID) */
-.section{display:flex;align-items:center;gap:7px;font:bold 10px Tahoma,sans-serif;letter-spacing:.4px;text-transform:uppercase;color:#fff;background:var(--blue);padding:3px 7px}
+.section{display:flex;align-items:center;gap:7px;font:bold 10px var(--ui-font);letter-spacing:.4px;text-transform:uppercase;color:#fff;background:var(--blue);padding:3px 7px}
 .section .scount{margin-left:auto;font-weight:normal;text-transform:none;background:var(--gray);color:var(--heading);padding:0 6px;border:1px inset var(--edge)}
 /* строка диска или массива */
 .slist{display:flex;flex-direction:column;gap:8px}
 .srow{display:flex;flex-direction:column;gap:4px;min-width:0}
 .srow-head{display:flex;align-items:baseline;gap:7px;min-width:0}
-.srow-name{font:bold 11px Tahoma,sans-serif;color:var(--heading);white-space:nowrap}
+.srow-name{font:bold 11px var(--ui-font);color:var(--heading);white-space:nowrap}
 .srow-meta{flex:1 1 auto;min-width:0;font-size:9px;color:var(--dim-4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.srow-val{flex:0 0 auto;font:11px Tahoma,sans-serif;color:var(--text-3);background:var(--surface);border:2px inset var(--edge);padding:2px 6px;white-space:nowrap}
+.srow-val{flex:0 0 auto;font:11px var(--ui-font);color:var(--text-3);background:var(--surface);border:2px inset var(--edge);padding:2px 6px;white-space:nowrap}
 .srow-sub{font-size:9px;color:var(--dim-4);line-height:1.35;overflow:hidden}
 .srow.is-warn .gauge-fill{background:repeating-linear-gradient(90deg,var(--warn) 0 9px,var(--surface) 9px 12px)}
 .srow.is-work .gauge-fill{background:repeating-linear-gradient(90deg,var(--warn) 0 9px,var(--surface) 9px 12px)}
@@ -365,7 +413,7 @@ body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14
 .palette-group label.is-off{color:var(--dim-4)}
 .palette-group label input{margin:0}
 .palette-actions{display:flex;gap:6px}
-.palette-actions button{flex:1;font:11px Tahoma,sans-serif;padding:4px 6px;border:2px outset var(--edge);background:var(--gray);color:var(--text-strong);cursor:pointer}
+.palette-actions button{flex:1;font:11px var(--ui-font);padding:4px 6px;border:2px outset var(--edge);background:var(--gray);color:var(--text-strong);cursor:pointer}
 .palette-actions button:active{border-color:var(--black) var(--light) var(--light) var(--black)}
 .palette-hint{font-size:10px;color:var(--text-2);line-height:1.35}
 .help-window{width:min(560px,100%);max-height:80vh;display:flex;flex-direction:column;box-shadow:4px 4px 0 #0006}
@@ -378,18 +426,34 @@ body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14
 /* --- Picture Viewer: картинки и GIF --------------------------------- */
 .art-img{display:block;-webkit-user-select:none;user-select:none;-webkit-user-drag:none}
 .art-img[hidden]{display:none}
-#winArt.dropping .art-stage{outline:2px dashed #6cf;outline-offset:-6px}
+.art-window.dropping .art-stage{outline:2px dashed #6cf;outline-offset:-6px}
 .open-window{width:min(470px,100%)}
 .open-body{border:2px inset var(--edge);padding:14px;background:var(--gray);display:flex;flex-direction:column;gap:10px}
-.open-label{font:bold 11px Tahoma,sans-serif;color:var(--heading)}
+.open-label{font:bold 11px var(--ui-font);color:var(--heading)}
 .open-row{display:flex;gap:7px;align-items:center}
-.open-input{flex:1 1 auto;min-width:0;border:2px inset var(--edge);background:var(--surface);padding:5px 6px;font:11px Tahoma,sans-serif;color:var(--text)}
-.open-hint{font:10px Tahoma,sans-serif;color:var(--dim-2);line-height:1.45}
+.open-input{flex:1 1 auto;min-width:0;border:2px inset var(--edge);background:var(--surface);padding:5px 6px;font:11px var(--ui-font);color:var(--text)}
+.open-hint{font:10px var(--ui-font);color:var(--dim-2);line-height:1.45}
+.open-target{font:11px var(--ui-font);color:var(--heading)}
 .open-hint code{background:var(--surface);border:1px solid var(--line-2);padding:0 3px;font-family:"DejaVu Sans Mono",monospace;color:var(--text)}
-.open-err{font:bold 10px Tahoma,sans-serif;color:var(--error);line-height:1.45}
+.open-err{font:bold 10px var(--ui-font);color:var(--error);line-height:1.45}
 .open-actions{display:flex;justify-content:flex-end;gap:7px}
-.open-btn{background:var(--gray);border:2px outset var(--edge);font:11px Tahoma,sans-serif;padding:5px 14px;color:var(--text);cursor:default}
+.open-btn{background:var(--gray);border:2px outset var(--edge);font:11px var(--ui-font);padding:5px 14px;color:var(--text);cursor:default}
 .open-btn:active{border-style:inset}
+/* View → Font… — список шрифтов, установленных в системе */
+.font-window{max-height:86vh;display:flex;flex-direction:column}
+.font-window .open-body{flex:1 1 auto;min-height:0}
+.font-list{border:2px inset var(--edge);background:var(--surface);flex:1 1 auto;
+ min-height:110px;max-height:48vh;overflow:auto}
+.font-item{display:flex;align-items:center;justify-content:space-between;gap:8px;
+ width:100%;text-align:left;background:transparent;border:0;
+ border-bottom:1px solid var(--line-2);padding:5px 8px;color:var(--text);
+ font-family:inherit;font-size:15px;cursor:default}
+.font-item:last-child{border-bottom:0}
+.font-item:hover{background:var(--hover)}
+.font-item.on{background:var(--blue);color:#fff}
+.font-item .tick{flex:0 0 auto;font:bold 11px var(--ui-font);color:var(--dim-3)}
+.font-item.on .tick{color:#fff}
+.font-empty{padding:9px 8px;font:11px var(--ui-font);color:var(--dim-2);line-height:1.5}
 /* --- Audio Player ------------------------------------------------------ */
 #winMusic{min-width:250px;min-height:210px}
 .music-body{display:flex;flex-direction:column;gap:6px;padding:10px;overflow:hidden}
@@ -400,24 +464,24 @@ body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14
 .music-seek{height:14px;background:var(--surface);border:2px inset var(--edge);cursor:pointer;flex:0 0 auto;position:relative;overflow:hidden}
 .music-seek-fill{height:100%;width:0;background:var(--blue)}
 .music-controls{display:flex;gap:5px;flex:0 0 auto}
-.music-btn{flex:1 1 0;background:var(--gray);border:2px outset var(--edge);font:12px Tahoma,sans-serif;padding:4px 0;cursor:default;color:var(--text)}
+.music-btn{flex:1 1 0;background:var(--gray);border:2px outset var(--edge);font:12px var(--ui-font);padding:4px 0;cursor:default;color:var(--text)}
 .music-btn:active{border-style:inset;background:var(--active)}
 .music-row{display:flex;align-items:center;gap:6px;flex:0 0 auto}
-.music-lbl{font:10px Tahoma,sans-serif;color:var(--text-2)}
+.music-lbl{font:10px var(--ui-font);color:var(--text-2)}
 .music-vol{flex:1 1 auto;min-width:40px;height:16px;accent-color:var(--heading)}
-.music-tgl{width:26px;height:22px;background:var(--gray);border:2px outset var(--edge);font:bold 10px Tahoma,sans-serif;color:var(--dim-3);cursor:default;flex:0 0 auto}
+.music-tgl{width:26px;height:22px;background:var(--gray);border:2px outset var(--edge);font:bold 10px var(--ui-font);color:var(--dim-3);cursor:default;flex:0 0 auto}
 .music-tgl.on{border-style:inset;background:var(--active);color:var(--heading)}
 .music-list{flex:1 1 auto;min-height:48px;overflow:auto;background:var(--surface);border:2px inset var(--edge)}
-.music-item{display:block;width:100%;text-align:left;background:none;border:0;padding:4px 6px;font:11px Tahoma,sans-serif;color:var(--text);cursor:default;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.music-item{display:block;width:100%;text-align:left;background:none;border:0;padding:4px 6px;font:11px var(--ui-font);color:var(--text);cursor:default;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .music-item:hover{background:var(--hover-2)}
 .music-item.playing{background:var(--blue);color:#fff}
-.music-status{font:10px Tahoma,sans-serif;color:var(--dim-2);flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.music-status{font:10px var(--ui-font);color:var(--dim-2);flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* --- Скины плеера (Qmmp = Winamp 2) ------------------------------------ */
 /* Панель выбора скина: список из skins/ + кнопка «прочитать .wsz с диска» */
 .music-skins{display:flex;gap:5px;align-items:center;flex:0 0 auto}
-.music-skin-sel{flex:1 1 auto;min-width:0;height:22px;font:11px Tahoma,sans-serif;background:var(--surface);border:2px inset var(--edge);color:var(--text)}
-.music-skin-btn{flex:0 0 auto;height:22px;padding:0 7px;background:var(--gray);border:2px outset var(--edge);font:11px Tahoma,sans-serif;color:var(--text);cursor:default}
+.music-skin-sel{flex:1 1 auto;min-width:0;height:22px;font:11px var(--ui-font);background:var(--surface);border:2px inset var(--edge);color:var(--text)}
+.music-skin-btn{flex:0 0 auto;height:22px;padding:0 7px;background:var(--gray);border:2px outset var(--edge);font:11px var(--ui-font);color:var(--text);cursor:default}
 .music-skin-btn:active{border-style:inset;background:var(--active)}
 /* Холст, на котором рисуется окно Winamp: два канваса — главный и плейлист */
 .skin-host{display:none;flex:1 1 auto;min-height:0;overflow:auto;background:#202020;align-items:flex-start}
@@ -501,6 +565,13 @@ html[data-theme=dark] ::-webkit-scrollbar-button{background:#3a3a3a;border:2px o
  try{t=localStorage.getItem('nerevar-hub.theme')}catch(e){}
  if(t!=='dark'&&t!=='light')t=(window.CONFIG&&window.CONFIG.theme==='dark')?'dark':'light';
  document.documentElement.setAttribute('data-theme',t);
+ /* Шрифт — тоже до первой отрисовки: иначе панель успеет отрисоваться
+    шрифтом по умолчанию и мигнёт. Порядок тот же: выбор из View → Font…
+    (localStorage) -> CONFIG.font -> шрифт по умолчанию. */
+ var f=null;
+ try{f=localStorage.getItem('nerevar-hub.font')}catch(e){}
+ if(!f)f=(window.CONFIG&&String(window.CONFIG.font||'').trim())||'';
+ if(f)document.documentElement.style.setProperty('--ui-font',f);
 })();
 </script>
 </head>
@@ -535,6 +606,7 @@ html[data-theme=dark] ::-webkit-scrollbar-button{background:#3a3a3a;border:2px o
           <button data-action="layout-reset">Reset window layout</button>
           <div class="sep"></div>
           <button data-action="theme">Dark theme<span class="sc" data-theme-mark>✓</span></button>
+          <button data-action="font">Font…</button>
           <div class="sep"></div>
           <button data-action="toggle-fullscreen">Fullscreen</button>
         </div>
@@ -555,7 +627,7 @@ html[data-theme=dark] ::-webkit-scrollbar-button{background:#3a3a3a;border:2px o
     <div class="resize-grip" data-resize></div>
   </section>
 
-  <section class="appwindow" id="winArt">
+  <section class="appwindow art-window" id="winArt">
     <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-art-icon>P</span><span><span data-art-title>Picture Viewer</span> &mdash; <span data-art-file>ASCII_ART.TXT</span></span></div><div class="window-controls"><span class="winbtn" data-win-min="winArt">_</span><span class="winbtn" data-win-max="winArt">□</span><span class="winbtn" data-win-close="winArt">×</span></div></div>
     <div class="winbody art-body">
       <div class="art-stage"><div class="art-wrap"><pre><!-- ASCII-арт живёт отдельно: pics/ASCII_ART.TXT, сюда он подставляется при загрузке (CONFIG.artFile). --></pre><img class="art-img" alt="" hidden></div></div></div>
@@ -663,6 +735,7 @@ html[data-theme=dark] ::-webkit-scrollbar-button{background:#3a3a3a;border:2px o
     </div>
     <div class="open-body">
       <label class="open-label" for="artUrl">File or URL</label>
+      <div class="open-target">Opens in <b data-open-target>Picture Viewer</b></div>
       <div class="open-row">
         <input class="open-input" id="artUrl" type="text" spellcheck="false" autocomplete="off"
                placeholder="http://192.168.1.10/pics/cat.gif">
@@ -676,6 +749,31 @@ html[data-theme=dark] ::-webkit-scrollbar-button{background:#3a3a3a;border:2px o
       <div class="open-actions">
         <button class="open-btn" id="artOpenOk" type="button">Open</button>
         <button class="open-btn" data-close="openOverlay" type="button">Cancel</button>
+      </div>
+    </div>
+  </section>
+</div>
+<!-- Выбор шрифта (View → Font…): какие шрифты стоят в системе.
+     Список отдаёт server.py (GET /api/fonts) — fontconfig, а без него
+     он сам обходит шрифтовые папки. Выбор хранится как и тема. -->
+<div class="modal-overlay" id="fontOverlay" hidden>
+  <section class="window open-window font-window">
+    <div class="titlebar">
+      <div class="titleleft"><span class="appicon">F</span><span>Font</span></div>
+      <div class="window-controls"><span class="winbtn" data-close="fontOverlay">&times;</span></div>
+    </div>
+    <div class="open-body">
+      <label class="open-label" for="fontSearch">Find a font</label>
+      <div class="open-row">
+        <input class="open-input" id="fontSearch" type="text" spellcheck="false" autocomplete="off"
+               placeholder="Type to filter — or type any font name and press Enter">
+      </div>
+      <div class="open-hint">Current: <b data-font-current>Tahoma, Verdana, sans-serif</b></div>
+      <div class="font-list" data-font-list></div>
+      <div class="open-hint" data-font-source>Loading the list of system fonts…</div>
+      <div class="open-actions">
+        <button class="open-btn" type="button" data-font-default>Use default</button>
+        <button class="open-btn" type="button" data-close="fontOverlay">Close</button>
       </div>
     </div>
   </section>
@@ -782,9 +880,127 @@ function toggleTheme(){
  scheduleLayoutSave();                        // тема поедет в раскладку на сервер
  flashStatus('Theme: '+next);
 }
+
+/* --- Шрифт интерфейса (config.js / View → Font…) --------------------------
+   Строка font-family: начальное значение — CONFIG.font, но выбор в диалоге
+   важнее и, как тема, хранится в браузере и едет в раскладку на сервер
+   (layout.json), чтобы панель была одинаковой на всех устройствах.
+   Список установленных в системе шрифтов сервер отдаёт в GET /api/fonts:
+   в Linux их считает fontconfig (fc-list), без утилиты server.py сам
+   обходит папки и читает имена из файлов TTF/OTF. */
+const FONT_KEY='nerevar-hub.font';
+const FONT_DEFAULT='Tahoma, Verdana, sans-serif';
+let currentFont=FONT_DEFAULT;
+function applyFont(family){                  // ставит шрифт, память не трогает
+ family=String(family||'').trim()||FONT_DEFAULT;
+ currentFont=family;
+ document.documentElement.style.setProperty('--ui-font',family);
+ const cur=document.querySelector('[data-font-current]');
+ if(cur)cur.textContent=family;
+}
+function storedFont(){                       // выбор диалога из этого браузера
+ try{const v=localStorage.getItem(FONT_KEY);if(v)return v.trim()}catch(e){}
+ return null;
+}
+function defaultFont(){                      // что задано в config.js
+ const v=CONFIG.font;
+ return (typeof v==='string'&&v.trim())?v.trim():FONT_DEFAULT;
+}
+function setFont(family,remember){           // remember=false — забыть выбор
+ applyFont(family);
+ try{remember?localStorage.setItem(FONT_KEY,currentFont):localStorage.removeItem(FONT_KEY)}catch(e){}
+}
+
+/* --- диалог View → Font… --------------------------------------------------
+   Список берётся у сервера (GET /api/fonts) и рисуется каждым шрифтом из
+   списка: видно, как имя выглядит вживую. Строка поиска фильтрует, а если
+   введённого имени в списке нет — Enter применяет его как есть. */
+const fontOverlay=document.getElementById('fontOverlay');
+const fontList=document.querySelector('[data-font-list]');
+const fontSearch=document.getElementById('fontSearch');
+const fontSource=document.querySelector('[data-font-source]');
+let fontFamilies=null,fontLoading=false;
+function fontCurrentName(){return currentFont.split(',')[0].trim()}
+function renderFontList(){
+ if(!fontList)return;
+ const q=(fontSearch&&fontSearch.value||'').trim().toLowerCase();
+ const rows=(fontFamilies||[]).filter(f=>!q||f.toLowerCase().indexOf(q)>=0);
+ if(!rows.length){
+  fontList.innerHTML='<div class="font-empty">'+(fontFamilies&&fontFamilies.length
+    ?'No font matches “'+esc(q)+'” — press Enter to use it anyway'
+    :'The list is not loaded yet — type a font name and press Enter')+'</div>';
+  return;
+ }
+ const cur=fontCurrentName().toLowerCase();
+ fontList.innerHTML=rows.map(f=>{
+   const on=f.toLowerCase()===cur;
+   return '<button type="button" class="font-item'+(on?' on':'')+'"'+
+          ' data-font-name="'+esc(f)+'" style="font-family:\''+
+          esc(String(f).replace(/['"\\]/g,''))+'\'">'+esc(f)+
+          '<span class="tick">'+(on?'&#10003;':'')+'</span></button>';
+ }).join('');
+}
+async function loadFontFamilies(){
+ if(fontFamilies||fontLoading)return fontFamilies;
+ fontLoading=true;
+ try{
+  const res=await fetch('api/fonts',{cache:'no-store'});
+  if(!res.ok)throw new Error('HTTP '+res.status);
+  const data=await res.json();
+  fontFamilies=Array.isArray(data.families)?data.families:[];
+  if(fontSource)fontSource.textContent=fontFamilies.length+' fonts installed · '+
+    (data.source==='fontconfig'
+      ? 'found with fontconfig (fc-list)'
+      : 'found by scanning the font folders');
+ }catch(err){
+  fontFamilies=[];
+  if(fontSource)fontSource.textContent='System fonts are unavailable — the page is not served by server.py. Type any font name above and press Enter.';
+  console.warn('[font]',err);
+ }finally{fontLoading=false;}
+ renderFontList();
+ return fontFamilies;
+}
+function applyChosenFont(name,remember){
+ setFont(name,remember!==false);
+ scheduleLayoutSave();                        // шрифт поедет в раскладку на сервер
+ flashStatus('Font: '+fontCurrentName());
+ renderFontList();
+}
+function openFontDialog(){
+ if(!fontOverlay)return;
+ fontOverlay.hidden=false;
+ if(fontSearch)fontSearch.value='';
+ renderFontList();
+ loadFontFamilies();
+ if(fontSearch)fontSearch.focus();
+}
+function closeFontDialog(){if(fontOverlay)fontOverlay.hidden=true}
+if(fontSearch){
+ fontSearch.addEventListener('input',renderFontList);
+ fontSearch.addEventListener('keydown',event=>{
+  if(event.key==='Enter'){
+   event.preventDefault();
+   const value=fontSearch.value.trim();
+   if(value)applyChosenFont(value);
+  }
+ });
+}
+if(fontList)fontList.addEventListener('click',event=>{
+ const item=event.target.closest('[data-font-name]');
+ if(item)applyChosenFont(item.dataset.fontName);
+});
+const fontDefaultBtn=document.querySelector('[data-font-default]');
+if(fontDefaultBtn)fontDefaultBtn.addEventListener('click',()=>{
+ setFont(defaultFont(),false);               // забыть выбор — снова правит config.js
+ scheduleLayoutSave();
+ flashStatus('Font: '+fontCurrentName());
+ renderFontList();
+});
+
 function applyConfig(){
- /* тема: выбор кнопки View -> CONFIG.theme -> светлая; память не трогаем */
+ /* тема и шрифт: выбор кнопки View -> config.js -> значение по умолчанию */
  applyTheme(storedTheme()||(CONFIG.theme==='dark'?'dark':'light'));
+ applyFont(storedFont()||defaultFont());
  document.title=CONFIG.serverName;
  document.querySelectorAll('[data-server-name]').forEach(el=>{el.textContent=CONFIG.serverName});
  document.querySelectorAll('[data-server-icon]').forEach(el=>{el.textContent=CONFIG.serverIcon});
@@ -832,19 +1048,58 @@ function updateLinks(){
   link.target='_blank';link.rel='noopener noreferrer';
  });
 }
+/* --- Picture Viewer: сколько окон — решает config.js ----------------------
+   #winArt — шаблон и первое окно; остальные копируются сюда же, ДО
+   applyConfig(): тот расписывает заголовки, иконку и имя файла
+   querySelectorAll'ем по всей странице, поэтому копии должны уже существовать.
+   У каждой копии своя кнопка в таскбаре и свои data-win-* в заголовке. */
+function viewerCount(){
+ const n=Number(CONFIG.viewers);
+ if(!isFinite(n))return 2;                  // по умолчанию два окна
+ return Math.min(6,Math.max(1,Math.round(n)));
+}
+(function cloneViewerWindows(){
+ const tpl=document.getElementById('winArt');
+ const task=document.querySelector('.task[data-window="winArt"]');
+ if(!tpl||!tpl.parentNode)return;
+ let winAnchor=tpl,taskAnchor=task;
+ for(let i=2;i<=viewerCount();i++){
+  const id='winArt'+i;
+  const win=tpl.cloneNode(true);
+  win.id=id;
+  ['min','max','close'].forEach(k=>{
+   const el=win.querySelector('[data-win-'+k+']');
+   if(el)el.setAttribute('data-win-'+k,id);
+  });
+  winAnchor.parentNode.insertBefore(win,winAnchor.nextSibling);
+  winAnchor=win;
+  if(task){
+   const btn=task.cloneNode(true);
+   btn.dataset.window=id;
+   taskAnchor.parentNode.insertBefore(btn,taskAnchor.nextSibling);
+   taskAnchor=btn;
+  }
+ }
+})();
 applyConfig();
 lanInput.addEventListener('input',updateLinks);tailInput.addEventListener('input',updateLinks);updateLinks();
 
-const artStage=document.querySelector('.art-stage');
-const artWrap=artStage.querySelector('.art-wrap');
-const artPre=artWrap.querySelector('pre');
-const artImg=artWrap.querySelector('.art-img');
-const artWin=document.getElementById('winArt');
 const openOverlay=document.getElementById('openOverlay');
 const openInput=document.getElementById('artUrl');
 const fileInput=document.getElementById('artFileInput');
-let artMode='ascii';          // 'ascii' | 'image'
-let artBlobUrl=null;          // objectURL последнего открытого файла
+const artErr=document.getElementById('artErr');
+
+/* --- Picture Viewer: сколько окон и как они живут -------------------------
+   В разметке окно одно (#winArt) — оно же шаблон: сколько их открывать,
+   решает CONFIG.viewers (1..6, по умолчанию 2), копии создаются до
+   applyConfig() — см. cloneViewerWindows. Каждое окно живёт своей жизнью:
+   свой режим (арт/картинка), свой зум, свой objectURL и своё имя файла в
+   заголовке. Общее у них только содержимое: CONFIG.artFile / CONFIG.picFile
+   и папка pics/ — при '~' каждое окно при загрузке зовёт Math.random само
+   по себе, поэтому выбирает СВОЮ случайную картинку. */
+const viewers=[];             // все окна Picture Viewer, по порядку
+let activeViewer=null;        // в какое окно уйдёт File → Open image…
+
 function isBlankLine(line){return line.replace(/[\s\u2800]/g,'').length===0}
 function normalizeArt(text){
  const lines=text.split('\n');
@@ -853,39 +1108,48 @@ function normalizeArt(text){
  while(b>a&&isBlankLine(lines[b-1]))b--;
  return lines.slice(a,b).join('\n');
 }
-let asciiZoom=1;
-let fitting=false;
-function fitAscii(){
- if(fitting)return;
- fitting=true;
- try{
-  if(artMode==='image'){fitImageArt();return}
-  const normalized=normalizeArt(artPre.textContent);
-  if(normalized!==artPre.textContent)artPre.textContent=normalized;
-  const cs=getComputedStyle(artWrap);
-  const padX=parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight)+parseFloat(cs.borderLeftWidth)+parseFloat(cs.borderRightWidth);
-  const padY=parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom)+parseFloat(cs.borderTopWidth)+parseFloat(cs.borderBottomWidth);
-  const availW=artStage.clientWidth-padX;
-  const availH=artStage.clientHeight-padY;
-  const REF=100;
-  artPre.style.fontSize=REF+'px';
-  const artW=artPre.scrollWidth||1;
-  const artH=artPre.scrollHeight||1;
-  const scaleW=availW>0?availW/artW:Infinity;
-  const scaleH=availH>0?availH/artH:Infinity;
-  let scale=Math.min(scaleW,scaleH);
-  if(!isFinite(scale))scale=1;
-  scale*=asciiZoom;
-  artPre.style.fontSize=Math.max(1,REF*scale).toFixed(3)+'px';
- }finally{fitting=false}
+function makeViewer(win,task,index){
+ /* scope — окно и его кнопка в таскбаре: заголовок, иконка и имя файла
+    продублированы в обоих, поэтому ищем по обоим разом */
+ const scope=task?[win,task]:[win];
+ const pick=sel=>scope.reduce((a,el)=>a.concat(Array.from(el.querySelectorAll(sel))),[]);
+ return {
+  index:index,win:win,task:task,
+  stage:win.querySelector('.art-stage'),
+  wrap:win.querySelector('.art-wrap'),
+  pre:win.querySelector('pre'),
+  img:win.querySelector('.art-img'),
+  fileEls:pick('[data-art-file]'),
+  titleEls:pick('[data-art-title]'),
+  iconEls:pick('[data-art-icon]'),
+  mode:'ascii',               // 'ascii' | 'image'
+  zoom:1,                     // View → Zoom — своё у каждого окна
+  blobUrl:null,               // objectURL последнего открытого файла
+  shown:'',                   // имя последней реально показанной картинки
+  fitting:false               // внутри fitAscii — не перезапускаем себя же
+ };
 }
-window.addEventListener('resize',fitAscii);
-if('ResizeObserver'in window)new ResizeObserver(fitAscii).observe(artStage);
-new MutationObserver(fitAscii).observe(artPre,{childList:true,characterData:true,subtree:true});
-if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fitAscii);
-fitAscii();
+function viewerTitle(v){
+ const base=(typeof CONFIG!=='undefined'&&CONFIG.artWindowTitle)||'Picture Viewer';
+ return v.index>1?base+' '+v.index:base;
+}
+function applyViewerTitles(){
+ /* applyConfig пишет одинаковый заголовок во все окна — здесь разводим по
+    номерам: «Picture Viewer», «Picture Viewer 2», … */
+ viewers.forEach(v=>v.titleEls.forEach(el=>{el.textContent=viewerTitle(v)}));
+}
+function isViewer(win){return viewers.some(v=>v.win===win)}
+function viewerFor(win){return viewers.find(v=>v.win===win)||null}
+/* диалог открытия один на все окна, но адресат у него один — последнее
+   активное окно (activeViewer); в диалоге это подписано */
+function setOpenError(msg){
+ if(!artErr)return;
+ if(!msg){artErr.hidden=true;artErr.textContent='';return}
+ artErr.textContent=msg;
+ artErr.hidden=false;
+}
 
-/* --- pics/: единственное место, где лежат и картинки, и ascii-арт -------
+/* --- pics/: единственное место, где лежат и картинки, и ascii-арт --------
    В config.js — только имена файлов (CONFIG.artFile / CONFIG.picFile),
    само содержимое читается с сервера отсюда. */
 function baseName(path){return String(path||'').split('/').pop()||''}
@@ -900,28 +1164,37 @@ function fetchPics(){
   .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
   .then(j=>{picsList={images:(j&&j.images)||[],art:(j&&j.art)||[]};return picsList});
 }
-/* читает ascii-арт из pics/ и подставляет в <pre> */
+let artText=null;             // текст арта: он один на все окна — читаем один раз
+/* читает ascii-арт из pics/ и подставляет в <pre> каждого окна */
 async function loadArt(){
  const name=(CONFIG.artFile||'').trim();
  if(!name)return;
  // '~' выбирает КАРТИНКУ — это поле не про арт; подсказываем прямо в ошибке
  if(name.charAt(0)==='~'){
-  picFail(baseName(name),"'~' selects a picture - set it in CONFIG.picFile (artFile needs a text file)");
+  const why="'~' selects a picture - set it in CONFIG.picFile (artFile needs a text file)";
+  viewers.forEach(v=>picFail(v,baseName(name),why));
   return;
  }
  try{
-  const r=await fetch(picsUrl(name),{cache:'no-store'});
-  if(!r.ok)throw new Error('HTTP '+r.status);
-  const text=await r.text();
-  if(!text.replace(/[\s\u2800]/g,''))throw new Error('file is empty');
-  artPre.textContent=normalizeArt(text);
-  setArtFileName(baseName(name));
-  fitAscii();
-  autoSizeArt();
+  if(artText===null){
+   const r=await fetch(picsUrl(name),{cache:'no-store'});
+   if(!r.ok)throw new Error('HTTP '+r.status);
+   const text=await r.text();
+   if(!text.replace(/[\s\u2800]/g,''))throw new Error('file is empty');
+   artText=normalizeArt(text);
+  }
+  const file=baseName(name);
+  viewers.forEach(v=>{
+   v.pre.textContent=artText;
+   setArtFileName(v,file);
+   fitAscii(v);
+   autoSizeViewer(v);        // окно под пропорции арта (если его не тянули руками)
+  });
  }catch(err){
   // причина видна в заголовке: Cannot open: name — HTTP 404
-  picFail(baseName(name),(err&&err.message)||'');
-}
+  const why=(err&&err.message)||'';
+  viewers.forEach(v=>picFail(v,baseName(name),why));
+ }
 }
 /* '~.png' / '~.gif' / '~' -> имя случайной картинки из pics/ */
 async function resolvePic(spec){
@@ -933,120 +1206,167 @@ async function resolvePic(spec){
  if(!pool.length)throw new Error(ext?('no '+ext+' files in pics/'):'pics/ has no images');
  return pool[Math.floor(Math.random()*pool.length)];
 }
-/* картинка, заданная в конфиге (в т.ч. случайная) */
-function initPicture(){
+/* картинка, заданная в конфиге (в т.ч. случайная): своё число случайности
+   у каждого окна, поэтому каждое окно зовёт resolvePic само за собой */
+function initPicture(v){
  const spec=(CONFIG.picFile||'').trim();
  if(!spec)return Promise.resolve();
- return openFromPics(spec);
+ return openFromPics(v,spec);
 }
 
-/* --- Picture Viewer: картинки и GIF -----------------------------------
-   Режим 'image' прячет <pre> и показывает <img>: GIF проигрывается
-   браузером сам, пропорции не искажаются (одинаковый коэффициент по
-   обеим сторонам), View → Zoom действует и на картинку. */
-function fitImageArt(){
- const w=artImg.naturalWidth,h=artImg.naturalHeight;
- if(!w||!h)return;
- const cs=getComputedStyle(artWrap);
- const padX=parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight)+parseFloat(cs.borderLeftWidth)+parseFloat(cs.borderRightWidth);
- const padY=parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom)+parseFloat(cs.borderTopWidth)+parseFloat(cs.borderBottomWidth);
- const availW=artStage.clientWidth-padX,availH=artStage.clientHeight-padY;
- if(availW<=0||availH<=0)return;
- const k=Math.min(availW/w,availH/h)*asciiZoom;   // contain-fit, без искажений
- artImg.style.width=Math.max(1,w*k).toFixed(2)+'px';
- artImg.style.height=Math.max(1,h*k).toFixed(2)+'px';
+/* --- подгонка содержимого под окно ---------------------------------------
+   fitAscii() без аргумента подгоняет ВСЕ окна (так зовут resize, шрифты и
+   показ окна), fitAscii(v) — только своё. Режим, зум и пропорции у каждого
+   окна свои, поэтому считать приходится отдельно для каждого. */
+function fitAscii(v){
+ if(!v){viewers.forEach(x=>fitAscii(x));return}
+ if(v.fitting)return;
+ v.fitting=true;
+ try{
+  if(v.mode==='image'){fitImageArt(v);return}
+  const normalized=normalizeArt(v.pre.textContent);
+  if(normalized!==v.pre.textContent)v.pre.textContent=normalized;
+  const cs=getComputedStyle(v.wrap);
+  const padX=parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight)+parseFloat(cs.borderLeftWidth)+parseFloat(cs.borderRightWidth);
+  const padY=parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom)+parseFloat(cs.borderTopWidth)+parseFloat(cs.borderBottomWidth);
+  const availW=v.stage.clientWidth-padX;
+  const availH=v.stage.clientHeight-padY;
+  const REF=100;
+  v.pre.style.fontSize=REF+'px';
+  const artW=v.pre.scrollWidth||1;
+  const artH=v.pre.scrollHeight||1;
+  const scaleW=availW>0?availW/artW:Infinity;
+  const scaleH=availH>0?availH/artH:Infinity;
+  let scale=Math.min(scaleW,scaleH);
+  if(!isFinite(scale))scale=1;
+  scale*=v.zoom;
+  v.pre.style.fontSize=Math.max(1,REF*scale).toFixed(3)+'px';
+ }finally{v.fitting=false}
 }
-let artFileShown='';                    // имя последней реально показанной картинки
-function setArtFileName(name){
- const el=document.querySelector('[data-art-file]');
- if(el)el.textContent=name;
- if(!/^(Cannot open:|Not an image:)/.test(name||''))artFileShown=name;
+function measureArtRef(v){
+  const REF=100,prev=v.pre.style.fontSize;
+  v.pre.style.fontSize=REF+'px';
+  const w=v.pre.scrollWidth||1,h=v.pre.scrollHeight||1;
+  v.pre.style.fontSize=prev;
+  return {w:w,h:h};
+}
+function artAspect(v){
+  if(v.mode==='image'){
+    const w=v.img.naturalWidth,h=v.img.naturalHeight;
+    if(w>0&&h>0)return w/h;
+  }
+  const m=measureArtRef(v);
+  return m.w/m.h;
+}
+
+/* --- Picture Viewer: картинки и GIF --------------------------------------
+   Режим 'image' прячет <pre> и показывает <img>: GIF проигрывается
+   браузером сам, пропорции не искажаются (одинаковый коэффициент по обеим
+   сторонам), View → Zoom действует и на картинку — но только на своё окно. */
+function fitImageArt(v){
+  const w=v.img.naturalWidth,h=v.img.naturalHeight;
+  if(!w||!h)return;
+  const cs=getComputedStyle(v.wrap);
+  const padX=parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight)+parseFloat(cs.borderLeftWidth)+parseFloat(cs.borderRightWidth);
+  const padY=parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom)+parseFloat(cs.borderTopWidth)+parseFloat(cs.borderBottomWidth);
+  const availW=v.stage.clientWidth-padX,availH=v.stage.clientHeight-padY;
+  if(availW<=0||availH<=0)return;
+  const k=Math.min(availW/w,availH/h)*v.zoom;   // contain-fit, без искажений
+  v.img.style.width=Math.max(1,w*k).toFixed(2)+'px';
+  v.img.style.height=Math.max(1,h*k).toFixed(2)+'px';
+}
+function setArtFileName(v,name){
+ v.fileEls.forEach(el=>{el.textContent=name});
+ if(!/^(Cannot open:|Not an image:)/.test(name||''))v.shown=name;
 }
 function defaultArtName(){
  return (typeof CONFIG!=='undefined'&&CONFIG.artFile)?baseName(CONFIG.artFile):'Picture';
 }
-function freeArtBlob(){
- if(artBlobUrl){URL.revokeObjectURL(artBlobUrl);artBlobUrl=null}
+function freeArtBlob(v){
+ if(v.blobUrl){URL.revokeObjectURL(v.blobUrl);v.blobUrl=null}
 }
-function showAsciiArt(){
- artMode='ascii';
- artImg.hidden=true;
- artImg.removeAttribute('src');
- artImg.style.width='';artImg.style.height='';artImg.style.transform='';
- artWrap.style.maxWidth='';artWrap.style.overflow='';
- freeArtBlob();
- artPre.hidden=false;
- setArtFileName(defaultArtName());
- fitAscii();
- autoSizeArt();
+function showAsciiArt(v){
+ v=v||activeViewer||viewers[0];
+ if(!v)return;
+ v.mode='ascii';
+ v.img.hidden=true;
+ v.img.removeAttribute('src');
+ v.img.style.width='';v.img.style.height='';v.img.style.transform='';
+ v.wrap.style.maxWidth='';v.wrap.style.overflow='';
+ freeArtBlob(v);
+ v.pre.hidden=false;
+ setArtFileName(v,defaultArtName());
+ fitAscii(v);
+ autoSizeViewer(v);
 }
-function showImage(src,name){
- if(!src)return;
+function showImage(v,src,name){
+ if(!v||!src)return;
  // сначала пробуем загрузить отдельным изображением: если адрес мёртвый,
  // текущая картинка остаётся на месте, а диалог не закрывается
  const probe=new Image();
  probe.onload=()=>{
   probe.onload=null;probe.onerror=null;
-  const img=artImg;
+  const img=v.img;
   img.onload=()=>{
    img.onload=null;img.onerror=null;
-   artMode='image';
-   artPre.hidden=true;
+   v.mode='image';
+   v.pre.hidden=true;
    img.hidden=false;
    // картинка может быть шире окна (View → Zoom) — не даём .art-wrap её обрезать
-   artWrap.style.maxWidth='none';
-   artWrap.style.overflow='visible';
-   setArtFileName(name||'image');
-   if(artWin&&!artWin.hidden)focusWindow(artWin); // окно поднимается наверх; закрытое не активируем
-   fitAscii();
-   autoSizeArt();        // окно под пропорции картинки (если его не тянули руками)
+   v.wrap.style.maxWidth='none';
+   v.wrap.style.overflow='visible';
+   setArtFileName(v,name||'image');
+   if(!v.win.hidden)focusWindow(v.win); // окно поднимается наверх; закрытое не активируем
+   fitAscii(v);
+   autoSizeViewer(v);      // окно под пропорции картинки (если его не тянули руками)
    closeOpenDialog();
   };
   img.src=src;
  };
  probe.onerror=()=>{
   probe.onload=null;probe.onerror=null;
-  picFail(name||src,'not found or not an image'); // диалог остаётся — можно исправить адрес
+  picFail(v,name||src,'not found or not an image'); // диалог остаётся — можно исправить адрес
  };
  probe.src=src;
 }
-function openLocalFile(file){
+function openLocalFile(v,file){
  if(!file)return false;
  if(file.type&&!/^image\//.test(file.type)){
-  setArtFileName('Not an image: '+file.name);
+  setArtFileName(v,'Not an image: '+file.name);
   return false;
  }
- freeArtBlob();
- artBlobUrl=URL.createObjectURL(file);
- showImage(artBlobUrl,file.name);
+ freeArtBlob(v);
+ v.blobUrl=URL.createObjectURL(file);
+ showImage(v,v.blobUrl,file.name);
  return true;
 }
 function nameFromUrl(url){
  try{const u=new URL(url,location.href);return decodeURIComponent(u.pathname.split('/').pop())||u.hostname}
  catch(e){return 'image'}
 }
-const artErr=document.getElementById('artErr');
-function setOpenError(msg){
- if(!artErr)return;
- if(!msg){artErr.hidden=true;artErr.textContent='';return}
- artErr.textContent=msg;
- artErr.hidden=false;
-}
 /* общий отказ: причина попадает и в заголовок окна, и в открытый диалог */
-function picFail(what,why){
+function picFail(v,what,why){
  const msg='Cannot open: '+what+(why?(' — '+why):'');
- setArtFileName(msg);
+ if(v)setArtFileName(v,msg);
  setOpenError(msg);
  console.warn('[picture viewer]',msg);
 }
 /* открыть картинку из pics/: имя ('cat.png') или маска ('~.jpg' / '~.gif' / '~') */
-function openFromPics(spec){
+function openFromPics(v,spec){
  return resolvePic(spec)
-  .then(file=>{setOpenError('');showImage(picsUrl(file),baseName(file))})
-  .catch(err=>picFail(spec,(err&&err.message)||''));
+  .then(file=>{setOpenError('');showImage(v,picsUrl(file),baseName(file))})
+  .catch(err=>picFail(v,spec,(err&&err.message)||''));
+}
+function currentViewer(){
+ /* окно, с которым сейчас работаем: в последнее раз тыкнули в него мышью.
+    На него действуют File → Open image…, View → Zoom и Back to ASCII art. */
+ return activeViewer||viewers[0]||null;
 }
 function openOpenDialog(){
  if(!openOverlay)return;
+ const target=currentViewer();
+ const label=openOverlay.querySelector('[data-open-target]');
+ if(label)label.textContent=target?viewerTitle(target):'Picture Viewer';
  openOverlay.hidden=false;
  openInput.value='';
  setOpenError('');
@@ -1056,16 +1376,21 @@ function closeOpenDialog(){
  if(openOverlay)openOverlay.hidden=true;
  /* закрыли диалог после неудачной попытки (Esc/Cancel) — в заголовок
     возвращается имя последней показанной картинки, а не текст ошибки */
- const el=document.querySelector('[data-art-file]');
- if(el&&/^Cannot open:/.test(el.textContent)&&artFileShown)el.textContent=artFileShown;
+ const v=currentViewer();
+ if(!v)return;
+ v.fileEls.forEach(el=>{
+  if(/^Cannot open:/.test(el.textContent)&&v.shown)el.textContent=v.shown;
+ });
 }
 function openFromInput(){
- const v=(openInput.value||'').trim();
+ const v=currentViewer();
  if(!v)return;
+ const value=(openInput.value||'').trim();
+ if(!value)return;
  // '~.jpg' / '~.gif' / '~' — случайная картинка из pics/, как в CONFIG.picFile
- if(v.charAt(0)==='~')return openFromPics(v);
+ if(value.charAt(0)==='~')return openFromPics(v,value);
  setOpenError('');
- showImage(v,nameFromUrl(v));
+ showImage(v,value,nameFromUrl(value));
 }
 
 const artOk=document.getElementById('artOpenOk');
@@ -1078,34 +1403,54 @@ if(openOverlay)openOverlay.addEventListener('click',e=>{if(e.target===openOverla
 if(fileInput)fileInput.addEventListener('change',()=>{
  const f=fileInput.files&&fileInput.files[0];
  fileInput.value='';
- if(f){closeOpenDialog();openLocalFile(f)}
+ if(f){closeOpenDialog();openLocalFile(currentViewer(),f)}
 });
 
-/* перетаскивание файла прямо на окно Picture Viewer */
-['dragover','dragenter'].forEach(t=>artWin.addEventListener(t,e=>{
- const types=e.dataTransfer&&e.dataTransfer.types;
- if(types&&Array.from(types).indexOf('Files')<0)return;
- e.preventDefault();
- artWin.classList.add('dropping');
-}));
-['dragleave','dragend'].forEach(t=>artWin.addEventListener(t,e=>{
- if(t==='dragleave'&&e.relatedTarget&&artWin.contains(e.relatedTarget))return;
- artWin.classList.remove('dropping');
-}));
-artWin.addEventListener('drop',e=>{
- e.preventDefault();
- artWin.classList.remove('dropping');
- const dt=e.dataTransfer;if(!dt)return;
- const files=Array.from(dt.files||[]);
- if(files.length){
-  const file=files.find(f=>!f.type||/^image\//.test(f.type));
-  if(file)openLocalFile(file);
-  else setArtFileName('Not an image: '+files[0].name);   // просто сообщаем и ничего не ломаем
-  return;
- }
- const url=(dt.getData('text/uri-list')||dt.getData('text/plain')||'').split('\n')[0].trim();
- if(/^(https?:|data:|blob:)/i.test(url))showImage(url,nameFromUrl(url));
-});
+/* --- сборка окон: у каждого своё содержимое и свои наблюдатели ----------- */
+function bindViewerDrag(v){
+ const win=v.win;
+ /* перетаскивание файла прямо на окно Picture Viewer */
+ ['dragover','dragenter'].forEach(t=>win.addEventListener(t,e=>{
+  const types=e.dataTransfer&&e.dataTransfer.types;
+  if(types&&Array.from(types).indexOf('Files')<0)return;
+  e.preventDefault();
+  win.classList.add('dropping');
+ }));
+ ['dragleave','dragend'].forEach(t=>win.addEventListener(t,e=>{
+  if(t==='dragleave'&&e.relatedTarget&&win.contains(e.relatedTarget))return;
+  win.classList.remove('dropping');
+ }));
+ win.addEventListener('drop',e=>{
+  e.preventDefault();
+  win.classList.remove('dropping');
+  const dt=e.dataTransfer;if(!dt)return;
+  const files=Array.from(dt.files||[]);
+  if(files.length){
+   const file=files.find(f=>!f.type||/^image\//.test(f.type));
+   if(file)openLocalFile(v,file);
+   else setArtFileName(v,'Not an image: '+files[0].name); // просто сообщаем и ничего не ломаем
+   return;
+  }
+  const url=(dt.getData('text/uri-list')||dt.getData('text/plain')||'').split('\n')[0].trim();
+  if(/^(https?:|data:|blob:)/i.test(url))showImage(v,url,nameFromUrl(url));
+ });
+}
+function buildViewers(){
+ document.querySelectorAll('.art-window').forEach((win,i)=>{
+  const v=makeViewer(win,document.querySelector('.task[data-window="'+win.id+'"]'),i+1);
+  viewers.push(v);
+  /* наблюдатели — по одному набору на окно: арт и картинка живут отдельно */
+  window.addEventListener('resize',()=>fitAscii(v));
+  if('ResizeObserver'in window)new ResizeObserver(()=>fitAscii(v)).observe(v.stage);
+  new MutationObserver(()=>fitAscii(v)).observe(v.pre,{childList:true,characterData:true,subtree:true});
+  bindViewerDrag(v);
+ });
+ applyViewerTitles();
+ activeViewer=viewers[0]||null;
+ fitAscii();
+}
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>fitAscii());
+buildViewers();
 
 const menuitems=[...document.querySelectorAll('.menuitem[data-menu]')];
 function closeMenus(except){menuitems.forEach(m=>{if(m!==except)m.classList.remove('open')})}
@@ -1122,7 +1467,7 @@ menuitems.forEach(item=>{
  });
 });
 document.addEventListener('click',()=>closeMenus());
-document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeMenus();closeHelp();closeOpenDialog();closeLayoutPalette()}});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeMenus();closeHelp();closeOpenDialog();closeLayoutPalette();closeFontDialog()}});
 document.querySelectorAll('.menu button').forEach(btn=>btn.addEventListener('click',event=>{
  event.stopPropagation();runAction(btn.dataset.action);closeMenus();
 }));
@@ -1130,7 +1475,13 @@ document.querySelectorAll('.menuitem[data-action]').forEach(item=>item.addEventL
  event.stopPropagation();runAction(item.dataset.action);
 }));
 
-function setZoom(value){asciiZoom=Math.min(4,Math.max(.25,value));fitAscii()}
+function setZoom(value){
+ /* зум свой у каждого окна — крутим его у последнего активного */
+ const v=currentViewer();
+ if(!v)return;
+ v.zoom=Math.min(4,Math.max(.25,value));
+ fitAscii(v);
+}
 function openRoot(which){
  const host=cleanHost(which==='lan'?lanInput.value:tailInput.value);
  if(host)window.open('http://'+host,'_blank','noopener');
@@ -1152,8 +1503,8 @@ function runAction(action){
   case 'open-image':openOpenDialog();break;
   case 'back-ascii':showAsciiArt();break;
   case 'audio':showWindow(document.getElementById('winMusic'),true);break;
-  case 'zoom-in':setZoom(asciiZoom*1.15);break;
-  case 'zoom-out':setZoom(asciiZoom/1.15);break;
+  case 'zoom-in':{const v=currentViewer();if(v)setZoom(v.zoom*1.15);break;}
+  case 'zoom-out':{const v=currentViewer();if(v)setZoom(v.zoom/1.15);break;}
   case 'zoom-reset':setZoom(1);break;
   case 'toggle-services':{
    const services=document.querySelector('.services');
@@ -1168,6 +1519,7 @@ function runAction(action){
   case 'layout-save':saveLayoutNow(true);break;
   case 'layout-reset':resetLayout();break;
   case 'theme':toggleTheme();break;
+  case 'font':openFontDialog();break;
   case 'open-lan':openRoot('lan');break;
   case 'open-tail':openRoot('tail');break;
   case 'favorite':window.open(CONFIG.favoriteUrl,'_blank','noopener');break;
@@ -1228,6 +1580,8 @@ function focusWindow(win){
  win.classList.add('active');
  win.style.zIndex=++zCounter;
  const btn=taskFor(win);if(btn)btn.classList.add('active');
+ /* последнее активное окно Picture Viewer — адресат File → Open image… */
+ const fv=viewerFor(win);if(fv)activeViewer=fv;
 }
 function showWindow(win,show){
  win.hidden=!show;
@@ -1235,6 +1589,10 @@ function showWindow(win,show){
   if(win.dataset.autoplace==='1')placeMonitor();
   if(win.id==='winMusic')placeMusic();}
  else{const btn=taskFor(win);if(btn)btn.classList.remove('active');}
+ /* открыли или закрыли просмотрщик — доли пересчитываются: закрытые окна
+    места не занимают, остальные разъезжаются на свободное; монитор
+    переставляется вслед за ними, чтобы не остаться под новым окном */
+ if(isViewer(win)){autoSizeArt();placeMonitor();}
  scheduleLayoutSave();syncLayoutPalette();   // открыли/закрыли окно — запоминаем
 }
 function clampWindow(win){
@@ -1436,49 +1794,112 @@ document.addEventListener('keydown',event=>{
   if(event.key==='Escape'&&calPop&&!calPop.hidden)closeCal();
 });
 
-function measureArtRef(){
-  const REF=100,prev=artPre.style.fontSize;
-  artPre.style.fontSize=REF+'px';
-  const w=artPre.scrollWidth||1,h=artPre.scrollHeight||1;
-  artPre.style.fontSize=prev;
-  return {w:w,h:h};
-}
-function artAspect(){
-  if(artMode==='image'){
-    const w=artImg.naturalWidth,h=artImg.naturalHeight;
-    if(w>0&&h>0)return w/h;
+/* --- расстановка окон Picture Viewer --------------------------------------
+   Одно окно — прежняя расстановка байт в байт (правый нижний угол, в стопке —
+   под серверным окном), чтобы старая раскладка не поплыла. Несколько окон —
+   делим область на доли: в широком окне в ряд по низу правой колонки, на узком
+   экране друг под другом. Окно с ручной позицией (перетащили руками или
+   пришло из сохранённой раскладки) не трогаем — это его собственность. */
+/* Ищем свободное место для окна w×h: сначала там, где оно встало по расчёту,
+   затем сеткой вокруг — ближайшая точка, где окно целиком внутри сцены и не
+   перекрывает ни окно Server, ни перетащенные руками окна. Ничего не нашли —
+   оставляем как считали: пусть упрётся в препятствие, но не уедет за край. */
+function dodgeWindows(x,y,w,h,blocked,sw,sh,m){
+  const fits=(px,py)=>px>=m-1&&py>=m-1&&px+w<=sw-m+1&&py+h<=sh-m+1;
+  const hits=(px,py)=>blocked.some(b=>px<b.x+b.w&&b.x<px+w&&py<b.y+b.h&&b.y<py+h);
+  x=Math.round(x);y=Math.round(y);
+  if(fits(x,y)&&!hits(x,y))return{x,y};
+  const step=20,cx=x+w/2,cy=y+h/2;
+  let best=null,bestD=Infinity;
+  for(let py=m;py+h<=sh-m;py+=step){
+    for(let px=m;px+w<=sw-m;px+=step){
+      if(hits(px,py))continue;
+      const dx=px+w/2-cx,dy=py+h/2-cy,d=dx*dx+dy*dy;
+      if(d<bestD){bestD=d;best={x:px,y:py}}
+    }
   }
-  const m=measureArtRef();
-  return m.w/m.h;
+  return best||{x,y};
 }
-function autoSizeArt(force){
+function autoSizeViewer(v,force){
+  const win=v.win;
+  if(win.dataset.manual==='1'&&!force)return;
   const sw=scene.clientWidth,sh=scene.clientHeight,m=10;
-  const servers=document.getElementById('winServers'),art=document.getElementById('winArt');
-  if(art.dataset.manual==='1'&&!force)return;
+  const servers=document.getElementById('winServers');
   const sW=servers.hidden?0:servers.offsetWidth;
   const stack=sw<760||(sw-2*m-sW-m)<320;
-  let availW,availH,left,top;
+  /* область, где стоят просмотрщики: справа от серверного окна или под ним */
+  let areaX,areaY,areaW,areaH;
   if(stack){
-   availW=sw-2*m;
-   top=servers.hidden?m:servers.offsetHeight+m;
-   availH=sh-top-m;
-   left=m;
+    areaX=m;areaW=sw-2*m;
+    areaY=servers.hidden?m:servers.offsetHeight+m;
+    areaH=sh-areaY-m;
   }else{
-   availW=Math.max(260,sw-2*m-sW-m);
-   availH=Math.max(190,sh-2*m);
-   left=m;top=m;
+    areaX=sW+2*m;areaW=sw-3*m-sW;areaY=m;areaH=sh-2*m;
   }
-  availW=Math.max(260,availW);availH=Math.max(150,availH);
-  const aspect=artAspect();
-  let h=Math.min(availH,460);
-  let w=Math.min(availW,h*aspect);
-  if(w<320){w=Math.min(availW,320);h=Math.min(availH,w/aspect);}
-  w=Math.max(260,Math.round(w));h=Math.max(160,Math.round(h));
-  art.style.width=w+'px';art.style.height=h+'px';
-  art.style.left=(stack?left:sw-w-m)+'px';
-  art.style.top=(stack?top:sh-h-m)+'px';
-  art.style.right='auto';art.style.bottom='auto';
-  art.dataset.maximized='0';
+  const open=viewers.filter(x=>!x.win.hidden);
+  const count=Math.max(1,open.length);
+  const idx=Math.max(0,open.indexOf(v));
+  /* под окном Server бывает совсем не места (высокий контент, узкий экран):
+     без этой проверки высота доли нулевая, и все окна ложатся в одну точку
+     за нижним краем сцены. Поднимаем область вверх — просмотрщики встанут
+     поверх низа окна Server, но каждый в своей строке и целиком. */
+  const minSlot=200;
+  if(areaH<minSlot*count)areaY=Math.max(m,sh-m-minSlot*count);
+  areaH=sh-areaY-m;
+  const availW=Math.max(260,areaW);
+  const availH=Math.max(stack?150:190,areaH);
+  const aspect=artAspect(v);
+  let px,py;
+  if(count===1){
+    /* одно окно — ровно как раньше */
+    let h=Math.min(availH,460);
+    let w=Math.min(availW,h*aspect);
+    if(w<320){w=Math.min(availW,320);h=Math.min(availH,w/aspect);}
+    w=Math.max(260,Math.round(w));h=Math.max(160,Math.round(h));
+    win.style.width=w+'px';win.style.height=h+'px';
+    px=stack?areaX:sw-w-m;py=stack?areaY:sh-h-m;
+  }else if(!stack&&areaW/count>=300){
+    /* широкая колонка — в ряд по низу, каждое окно в своей доле */
+    const slotW=areaW/count;
+    let h=Math.min(availH,460);
+    let w=Math.min(slotW,h*aspect);
+    if(w<320){w=Math.min(slotW,320);h=Math.min(availH,w/aspect);}
+    w=Math.min(Math.max(260,Math.round(w)),Math.round(slotW));
+    h=Math.max(160,Math.round(h));
+    win.style.width=w+'px';win.style.height=h+'px';
+    px=Math.round(areaX+idx*slotW+(slotW-w)/2);py=sh-h-m;
+  }else{
+    /* узкий экран или узкая доля — окна друг под другом */
+    const slotH=areaH/count;
+    let h=Math.min(slotH,460);
+    let w=Math.min(availW,h*aspect);
+    if(w<320){w=Math.min(availW,320);h=Math.min(slotH,w/aspect);}
+    w=Math.max(260,Math.round(w));
+    h=Math.min(Math.max(160,Math.round(h)),Math.round(slotH));
+    win.style.width=w+'px';win.style.height=h+'px';
+    px=stack?Math.round(areaX+(availW-w)/2):sw-w-m;
+    py=Math.round(areaY+idx*slotH+(slotH-h)/2);
+  }
+  /* перетащенные руками окна не двигаем, но и не заезжаем на них: если доля
+     попадает на чужое ручное окно или на окно Server — отъезжаем в ближайшее
+     свободное место (то же делает placeMonitor для просмотрщиков) */
+  const blocked=[];
+  if(!servers.hidden)blocked.push(rectInScene(servers));
+  viewers.forEach(x=>{
+    if(x!==v&&!x.win.hidden&&x.win.dataset.manual==='1')blocked.push(rectInScene(x.win));
+  });
+  const mon=document.getElementById('winMonitor');
+  if(mon&&!mon.hidden&&mon.dataset.manual==='1')blocked.push(rectInScene(mon));
+  const pos=dodgeWindows(px,py,parseFloat(win.style.width),parseFloat(win.style.height),
+                         blocked,sw,sh,m);
+  win.style.left=pos.x+'px';win.style.top=pos.y+'px';
+  win.style.right='auto';win.style.bottom='auto';
+  win.dataset.maximized='0';
+}
+function autoSizeArt(force){
+  /* расставляем все окна, кроме занятых вручную: так делают показ окна и
+     финальная расстановка при загрузке страницы */
+  viewers.forEach(v=>autoSizeViewer(v,force));
 }
 /* --- System Monitor: подбор свободного места --------------------------- */
 function rectInScene(win){
@@ -1511,14 +1932,17 @@ function placeMonitor(){
     return;
   }
 
-  const servers=document.getElementById('winServers'),art=document.getElementById('winArt');
+  const servers=document.getElementById('winServers');
   const taken=[];
   if(!servers.hidden)taken.push(rectInScene(servers));
-  if(!art.hidden)taken.push(rectInScene(art));
+  /* все просмотрщики — препятствия отдельно: якорь «над окном арта» берём по
+     общей рамке окон, чтобы монитор не встал в щель между ними */
+  const artRects=viewers.filter(v=>!v.win.hidden).map(v=>rectInScene(v.win));
+  artRects.forEach(r=>taken.push(r));
   const sR=taken[0]?taken[0].x+taken[0].w:m;      // правая кромка серверного окна
   const sB=taken[0]?taken[0].y+taken[0].h:m;      // низ серверного окна
-  const aT=taken[1]?taken[1].y:sh-m;              // верх окна с артом
-  const aL=taken[1]?taken[1].x:sw-m;              // левая кромка окна с артом
+  const aL=artRects.length?Math.min.apply(null,artRects.map(r=>r.x)):sw-m;
+  const aT=artRects.length?Math.min.apply(null,artRects.map(r=>r.y)):sh-m;
 
   const maxW=Math.max(160,sw-2*m),maxH=Math.max(130,sh-2*m);
   const hardW=Math.min(maxW,180),hardH=Math.min(maxH,150);   // предел ужатия
@@ -2472,7 +2896,12 @@ function layoutWindows(force){
   /* Есть сохранённая раскладка — применяем её (координаты хранятся дробями
      от размера сцены, поэтому переживают другой размер окна браузера).
      Иначе — расставляем окна по умолчанию, как раньше. */
-  if(layoutReady&&savedLayout&&CONFIG.rememberLayout!==false&&applySavedLayout(savedLayout))return;
+  if(layoutReady&&savedLayout&&CONFIG.rememberLayout!==false&&applySavedLayout(savedLayout)){
+    /* в сохранённой раскладке может не быть новых окон (например, появился
+       второй Picture Viewer) — они встают на своё место сами */
+    autoSizeArt();
+    return;
+  }
   const sw=scene.clientWidth,sh=scene.clientHeight,m=10;
   const servers=document.getElementById('winServers');
   servers.style.left=m+'px';
@@ -2530,7 +2959,7 @@ function captureLayout(){
   });
   order.sort((a,b)=>a.z-b.z);
   return {v:1,scene:{w:sw,h:sh},z:order.map(o=>o.id),wins,
-          svc:[...hiddenSvc].sort((a,b)=>a-b),theme:currentTheme};
+          svc:[...hiddenSvc].sort((a,b)=>a-b),theme:currentTheme,font:currentFont};
 }
 
 function setMaximized(win,on){
@@ -2560,9 +2989,12 @@ function applySavedLayout(data){
   if(!sw||!sh)return false;
   layoutApplying=true;
   try{
-    /* тема приезжает вместе с раскладкой — выбрано где-то ещё, значит общее */
+    /* тема и шрифт приезжают вместе с раскладкой — выбрано где-то ещё,
+       значит общее для всех устройств */
     if(data.theme==='dark'||data.theme==='light')applyTheme(data.theme);
+    if(typeof data.font==='string'&&data.font.trim())applyFont(data.font);
     const m=10;
+    const restoredGeo=[];        // просмотрщики и монитор: задумано и нарисовано
     appWindows.forEach(w=>{
       const rec=data.wins[w.id];if(!rec)return;
       /* геометрия: доля -> пиксели, затем зажимаем внутрь сцены */
@@ -2593,6 +3025,16 @@ function applySavedLayout(data){
       w.hidden=!wantOpen;
       if(!wantOpen){const btn=taskFor(w);if(btn)btn.classList.remove('active');}
       if(wantOpen&&rec.max)setMaximized(w,true);
+      /* геометрия для проверки накладок ниже: plan — как задумано раскладкой
+         (доли без зажатия внутрь сцены), rect — как окно реально нарисовалось */
+      if(!w.hidden&&(isViewer(w)||w.id==='winMonitor')&&w.dataset.maximized!=='1'){
+        const rw2=w.offsetWidth||0,rh2=w.offsetHeight||0;
+        restoredGeo.push({w,isViewer:isViewer(w),
+          rect:{x,y,w:rw2,h:rh2},
+          plan:{x:rec.x==null?x:Math.round(rec.x*sw),
+                y:rec.y==null?y:Math.round(rec.y*sh),
+                w:parseFloat(w.style.width)||rw2,h:parseFloat(w.style.height)||rh2}});
+      }
     });
     /* карточки services */
     if(Array.isArray(data.svc)){
@@ -2608,6 +3050,39 @@ function applySavedLayout(data){
       if(w)w.style.zIndex=String(10+i);
     });
     zCounter=Math.max(zCounter,10+appWindows.length+order.length);
+    /* На узком экране сохранённый размер бывает уже min-width: окно растёт
+       до минимума и заезжает на соседа, хотя в раскладке окна не пересекались.
+       Такую накладку разводим в ближайшее свободное место (размер окон не
+       трогаем); намеренную «стопку» из раскладки не трогаем — по задумке окна
+       в ней пересекаются. */
+    const srvW=document.getElementById('winServers');
+    const sRect=srvW.hidden?null:rectInScene(srvW);
+    const vs=restoredGeo.filter(g=>g.isViewer);
+    vs.forEach(g=>{
+      const others=restoredGeo.filter(o=>o!==g);
+      let clash=others.some(o=>overlapArea(g.rect,o.rect)>0&&overlapArea(g.plan,o.plan)===0);
+      if(!clash&&sRect)clash=overlapArea(g.rect,sRect)>0&&overlapArea(g.plan,sRect)===0;
+      if(!clash)return;
+      const blockers=others.map(o=>o.rect);
+      if(sRect)blockers.push(sRect);
+      const np=dodgeWindows(g.rect.x,g.rect.y,g.rect.w,g.rect.h,blockers,sw,sh,m);
+      g.w.style.left=np.x+'px';g.w.style.top=np.y+'px';
+      g.rect.x=np.x;g.rect.y=np.y;
+    });
+    /* Развести не удалось (места под этот экран нет) — перераскладываем все
+       окна просмотра заново: они ужмутся под текущий экран и встанут в ряд,
+       как при обычной загрузке без сохранённой раскладки. Намеренную стопку
+       (окна пересекались и в самой раскладке) не трогаем. */
+    let stuck=false;
+    for(let i=0;i<vs.length&&!stuck;i++)
+      for(let j=i+1;j<vs.length;j++){
+        const a=vs[i],b=vs[j];
+        if(overlapArea(a.rect,b.rect)>0&&overlapArea(a.plan,b.plan)===0){stuck=true;break}
+      }
+    if(stuck){
+      viewers.forEach(v=>{if(!v.win.hidden)v.win.dataset.manual=''});
+      autoSizeArt(true);
+    }
     const topId=order[order.length-1];
     const topW=topId?document.getElementById(topId):null;
     const active=(topW&&!topW.hidden)?topW:appWindows.find(w=>!w.hidden);
@@ -2700,8 +3175,10 @@ function resetLayout(){
   }finally{layoutApplying=false}
   clearTimeout(layoutSaveTimer);
   try{localStorage.removeItem(LAYOUT_KEY)}catch(e){}
-  /* тема возвращается к тому, что задано в config.js (выбор кнопки забываем) */
+  /* тема и шрифт возвращаются к тому, что задано в config.js
+     (выбор кнопки и диалога забываем) */
   setTheme(CONFIG.theme==='dark'?'dark':'light',false);
+  setFont(defaultFont(),false);
   fetch('api/layout',{method:'DELETE'}).catch(()=>{});
   layoutWindows(true);
   zCounter=10;
@@ -3024,8 +3501,11 @@ function startMonitor(){
   focusWindow(document.getElementById('winServers'));
   fitAscii();
   startMonitor();
-  // содержимое окна — из папки pics/: сначала арт, потом картинка из конфига
-  try{await loadArt();await initPicture();}catch(e){}
+  // содержимое окон — из папки pics/: сначала арт (он один на все окна),
+  // потом картинка из конфига: каждое окно выбирает свою случайную, если
+  // CONFIG.picFile = '~' — Math.random зовётся по разу на окно
+  try{await loadArt();}catch(e){}
+  for(const v of viewers){try{await initPicture(v);}catch(e){}}
   /* арт подогнан под содержимое — расставляем окна окончательно: иначе
      размер System Monitor (он встаёт в свободное место рядом с артом)
      зависит от того, успела ли картинка загрузиться, и на каждой загрузке
@@ -3034,7 +3514,10 @@ function startMonitor(){
   // раскладка с сервера применяется последней — поверх авто-расстановки
   if(CONFIG.rememberLayout!==false){
     savedLayout=await loadSavedLayout();
-    if(savedLayout)applySavedLayout(savedLayout);
+    if(savedLayout){
+      applySavedLayout(savedLayout);
+      autoSizeArt();   // окна, которых в раскладке ещё не было, встают сами
+    }
   }
   layoutReady=true;                 // дальше изменения можно сохранять
   syncLayoutPalette();
