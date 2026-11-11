@@ -291,6 +291,9 @@
         about               — имя и версия панели
         exit                — закрыть окно терминала
         sudo <команда>      — шутка
+    Список поговорок для fortune — CONFIG.term.fortunes в config.js:
+    массив строк, по одной на строку; правится там, index.html не
+    трогаем, а пустой список команда отметит подсказкой.
     fetch берёт данные оттуда же, откуда System Monitor, — GET /api/stats
     (там же host, os и kernel, их добавляет server.py), плюс то, что знает
     сам браузер: тема, шрифт, размер экрана, число окон и сервисов. Если
@@ -3776,24 +3779,16 @@ const TERM_COW=[
  '                ||----w |',
  '                ||     ||'
 ];
-/* Форчуны: короткие поговорки о серверах и панели. Весь видимый текст —
-   по-английски, как и остальной вывод консоли. */
-const TERM_FORTUNES=[
- 'There are two hard problems in computing: cache invalidation, naming things, and off-by-one errors.',
- 'A home server is always on — until you need it, and then it listens on another port.',
- 'It works on my machine. This is your machine. My condolences.',
- 'To err is human. To really foul things up you need a cron job.',
- 'The server is up, the service is down. Such is life.',
- 'Debugging is like being the detective in a crime movie where you are also the murderer.',
- 'Uptime is a number you can only make bigger by not fixing the crashes.',
- 'Windows Update: restarting in 15 minutes. Forever.',
- 'Backup: the only computing term where both meanings are urgent.',
- 'RTFM is not an insult, it is a manual.',
- 'rm -rf is a quick way to learn which backups you never made.',
- 'The cloud is just someone else\'s computer — with better uptime.',
- 'A sysadmin never dies, they just go into /dev/null.',
- 'Q: how many updates to change a lightbulb? A: none, it rebooted first.'
-];
+/* Поговорки для fortune живут в config.js: CONFIG.term.fortunes —
+   массив строк, по одной шутке на строку (правится там, index.html
+   не трогаем). Здесь только чтение: пустой или отсутствующий список
+   не роняет команду — она печатает подсказку, куда добавить шутки. */
+function termFortunes(){
+ const list=termCfg().fortunes;
+ return Array.isArray(list)
+  ? list.map(x=>String(x==null?'':x).trim()).filter(Boolean)
+  : [];
+}
 /* Страницы справки для man: n — одна строка NAME, s — SYNOPSIS,
    d — строки DESCRIPTION. Чего нет в словаре, о том классически
    отвечает «No manual entry for …» (про theme, open, exit, sudo…). */
@@ -3809,8 +3804,8 @@ const TERM_MAN={
      'With no text she says a default greeting.',
      'She has seen things. She does not judge.']},
  fortune:{n:'print a random quip',s:'fortune',
-  d:['One of the built-in fortunes, picked at random.',
-     'Mostly true. Occasionally a threat.']},
+  d:['One of the fortunes from CONFIG.term.fortunes,',
+     'picked at random. Mostly true. Occasionally a threat.']},
  cal:{n:'display a calendar',s:'cal [month] [year]',
   d:['A month grid, Sunday first; today is green.',
      'Month is a number (1-12) or a name (nov, dec).',
@@ -4026,9 +4021,14 @@ const TERM_CMDS={
   termPrint(' '+'-'.repeat(width+2));
   TERM_COW.forEach(l=>termPrint(l));
  },
- /* fortune — случайная поговорка из встроенного списка */
+ /* fortune — случайная поговорка из CONFIG.term.fortunes (config.js) */
  fortune(){
-  termPrint(TERM_FORTUNES[Math.floor(Math.random()*TERM_FORTUNES.length)]);
+  const list=termFortunes();
+  if(!list.length){
+   termPrint('fortune: no jokes — add them to CONFIG.term.fortunes in config.js','term-err');
+   return;
+  }
+  termPrint(list[Math.floor(Math.random()*list.length)]);
  },
  /* man — страница справки в классическом виде */
  man(args){

@@ -211,7 +211,27 @@ window.CONFIG={
    '$ fetch'
   ],
   // Логотип в выводе fetch: массив строк; пусто — встроенный
-  logo:[]
+  logo:[],
+  // Поговорки для команды fortune: по одной на строку, весь текст —
+  // по-английски, как и остальной вывод консоли. Список правится
+  // здесь, index.html трогать не нужно; если массив пуст или поля
+  // нет вовсе — команда честно напишет, куда добавить шутки.
+  fortunes:[
+   'There are two hard problems in computing: cache invalidation, naming things, and off-by-one errors.',
+   'A home server is always on — until you need it, and then it listens on another port.',
+   'It works on my machine. This is your machine. My condolences.',
+   'To err is human. To really foul things up you need a cron job.',
+   'The server is up, the service is down. Such is life.',
+   'Debugging is like being the detective in a crime movie where you are also the murderer.',
+   'Uptime is a number you can only make bigger by not fixing the crashes.',
+   'Windows Update: restarting in 15 minutes. Forever.',
+   'Backup: the only computing term where both meanings are urgent.',
+   'RTFM is not an insult, it is a manual.',
+   'rm -rf is a quick way to learn which backups you never made.',
+   'The cloud is just someone else\'s computer — with better uptime.',
+   'A sysadmin never dies, they just go into /dev/null.',
+   'Q: how many updates to change a lightbulb? A: none, it rebooted first.'
+  ]
  },
  services:[
   {name:'Placeholder 01',port:'8001',note:'Demo endpoint',icon:'♫'},
@@ -235,7 +255,7 @@ window.CONFIG={
    'Which picture opens on start is set by <code>CONFIG.picFile</code>: <code>cat.png</code> — a specific file from <code>pics/</code>, <code>~.png</code> / <code>~.gif</code> / <code>~</code> — a <b>random</b> picture of that extension picked from <code>pics/</code> on every page load (the file list comes from <code>/api/pics</code>), empty — stay on the ASCII art.',
    'Several Picture Viewer windows can be open at once &mdash; <code>CONFIG.viewers</code> sets how many (1&ndash;6, default 2). They do not depend on each other: every window keeps its own picture, its own zoom and its own art/image mode. <code>File &rarr; Open image&hellip;</code> sends the picture to the viewer you focused last and the dialog says which one. Content comes from the same settings for all of them, and with <code>~</code> each window picks <b>its own</b> random picture on every load.',
    'The <b>System Monitor</b> window polls <code>/api/stats</code> (served by <code>server.py</code>) and shows CPU, RAM and Load, a <b>Storage</b> section with every mounted volume, and a <b>RAID</b> section with every array from <code>/proc/mdstat</code> (level, size, state, member disks). When the server is down it shows &laquo;N/A &mdash; host unreachable&raquo;.',
-   'The <b>Terminal</b> window (<b>File &rarr; Terminal</b>) is a console parody: <code>fetch</code> (or <code>neofetch</code>) prints a fastfetch-style summary of the machine &mdash; OS, host, kernel, uptime, CPU, memory and disks from <code>/api/stats</code> plus the browser side (theme, font, screen, number of windows and service cards) next to an ASCII logo. Other commands: <code>help</code>, <code>clear</code>, <code>date</code>, <code>echo</code>, <code>whoami</code>, <code>uname</code>, <code>uptime</code>, <code>ls</code>, <code>cowsay</code> (the cow says your line), <code>fortune</code> (a random quip), <code>cal</code> (a month calendar with today in green), <code>df</code> and <code>free</code> (disks and memory as in Linux), <code>ps</code> (the open windows as fake processes), <code>man</code> (a manual page, or <code>No manual entry</code>), <code>theme dark|light</code>, <code>open &lt;window&gt;</code>, <code>about</code>, <code>exit</code>; the arrow keys recall the history and Tab completes a command name. What the console prints on start is set by <code>CONFIG.term.startup</code>: a plain string is printed as it is, a line starting with <code>$&nbsp;</code> is run as a command &mdash; so the default list greets you and shows the system summary right away. <code>CONFIG.term</code> also holds the window title, icon, size, start state, the <code>user</code> name in the prompt and an optional <code>logo</code> for <code>fetch</code>.',
+   'The <b>Terminal</b> window (<b>File &rarr; Terminal</b>) is a console parody: <code>fetch</code> (or <code>neofetch</code>) prints a fastfetch-style summary of the machine &mdash; OS, host, kernel, uptime, CPU, memory and disks from <code>/api/stats</code> plus the browser side (theme, font, screen, number of windows and service cards) next to an ASCII logo. Other commands: <code>help</code>, <code>clear</code>, <code>date</code>, <code>echo</code>, <code>whoami</code>, <code>uname</code>, <code>uptime</code>, <code>ls</code>, <code>cowsay</code> (the cow says your line), <code>fortune</code> (a random quip from <code>CONFIG.term.fortunes</code>), <code>cal</code> (a month calendar with today in green), <code>df</code> and <code>free</code> (disks and memory as in Linux), <code>ps</code> (the open windows as fake processes), <code>man</code> (a manual page, or <code>No manual entry</code>), <code>theme dark|light</code>, <code>open &lt;window&gt;</code>, <code>about</code>, <code>exit</code>; the arrow keys recall the history and Tab completes a command name. What the console prints on start is set by <code>CONFIG.term.startup</code>: a plain string is printed as it is, a line starting with <code>$&nbsp;</code> is run as a command &mdash; so the default list greets you and shows the system summary right away. <code>CONFIG.term</code> also holds the window title, icon, size, start state, the <code>user</code> name in the prompt and an optional <code>logo</code> for <code>fetch</code>.',
    'The <b>Audio Player</b> (<b>File &rarr; Audio player</b>) streams music from <code>CONFIG.music.base</code> — the <code>music/</code> folder served by <code>server.py</code> (track list from <code>/api/music</code>) or any URL. Transport buttons, seek, volume, <b>S</b> (shuffle) and <b>R</b> (repeat), clickable track list. If a track shows &laquo;unsupported or damaged audio file&raquo;, the browser cannot decode that file (for example, some FLAC files with broken cover art are rejected by Chromium &mdash; <code>metaflac --remove --block-type=PICTURE file.flac</code> repairs them).',
    'The player can look like a real Winamp/Qmmp window: put a <code>.wsz</code> skin (a ZIP with <code>main.bmp</code>, <code>cbuttons.bmp</code>, <code>pledit.bmp</code>&hellip;) into the <code>skins/</code> folder and choose it from the list, press <b>Skin&hellip;</b> to load one from this computer, or drop a skin file onto the window. Everything is parsed in the browser &mdash; nothing is uploaded. Size and playlist height &mdash; <code>CONFIG.music.skins.scale</code> and <code>playlistHeight</code>.',
    'Windows can be dragged by the title bar and resized from the bottom-right corner.',
