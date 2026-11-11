@@ -275,9 +275,16 @@
         date                — текущая дата и время
         echo <текст>        — напечатать текст
         whoami              — кто вы (user из config.js)
-        uname [-a|-r|-s]    — система, ядро, машина (с сервера)
+        uname [-a|-r|-s|-m] — система, ядро, машина (с сервера)
         uptime              — как давно сервер работает
         ls                  — содержимое папок pics/ music/ skins/
+        cowsay <текст>      — корова повторит вашу фразу
+        fortune             — случайная поговорка
+        cal [месяц] [год]   — сетка месяца, сегодня зелёным
+        df                  — таблица места на дисках
+        free                — память сервера: total/used/free
+        ps                  — окна панели как «процессы» (PID/STAT/CMD)
+        man <команда>       — страница справки (или «No manual entry»)
         theme dark|light    — переключить тему панели
         open <окно>         — открыть окно: server, viewer, monitor,
                               music, help, term
@@ -3648,7 +3655,9 @@ function termPrint(text,cls){
  String(text==null?'':text).split('\n').forEach(line=>{
   const div=document.createElement('div');
   div.className='term-line'+(cls?' '+cls:'');
-  div.textContent=line;
+  /* Пустая строка обязана занимать строку высоты: div без содержимого
+     схлопнулся бы в ноль и разделители разделов (man, fetch) пропали. */
+  div.textContent=line===''?'\u00A0':line;
   termOut.appendChild(div);
  });
  termScroll();
@@ -3660,7 +3669,7 @@ function termPrintHtml(html,cls,style){
  const div=document.createElement('div');
  div.className='term-line'+(cls?' '+cls:'');
  if(style)div.style.cssText=style;
- div.innerHTML=html;
+ div.innerHTML=html===''?'\u00A0':html;
  termOut.appendChild(div);
  termScroll();
 }
@@ -3682,11 +3691,9 @@ async function termStats(){
 }
 function termDateStr(){
  const d=new Date();
- const M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
- const D=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
  const p=n=>String(n).padStart(2,'0');
- return D[d.getDay()]+' '+M[d.getMonth()]+' '+d.getDate()+' '+d.getFullYear()+
-        ' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+ return CAL_WD_SHORT[d.getDay()]+' '+CAL_MO_SHORT[d.getMonth()]+' '+d.getDate()+
+        ' '+d.getFullYear()+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
 }
 /* --- fetch: сводка о системе в две колонки (лого слева, поля справа) ---- */
 function termFetchRows(stats){
@@ -3759,6 +3766,88 @@ async function termDoFetch(){
  termRenderFetch(logo,head,termFetchRows(stats));
 }
 
+/* --- данные для новых команд -------------------------------------------- */
+/* Корова классического cowsay: рисуется как есть, termPrint ставит текст
+   через textContent — обратные слэши трогать не надо. */
+const TERM_COW=[
+ "        \\   ^__^",
+ '         \\  (oo)\\_______',
+ '            (\\__)\\       )\\/\\',
+ '                ||----w |',
+ '                ||     ||'
+];
+/* Форчуны: короткие поговорки о серверах и панели. Весь видимый текст —
+   по-английски, как и остальной вывод консоли. */
+const TERM_FORTUNES=[
+ 'There are two hard problems in computing: cache invalidation, naming things, and off-by-one errors.',
+ 'A home server is always on — until you need it, and then it listens on another port.',
+ 'It works on my machine. This is your machine. My condolences.',
+ 'To err is human. To really foul things up you need a cron job.',
+ 'The server is up, the service is down. Such is life.',
+ 'Debugging is like being the detective in a crime movie where you are also the murderer.',
+ 'Uptime is a number you can only make bigger by not fixing the crashes.',
+ 'Windows Update: restarting in 15 minutes. Forever.',
+ 'Backup: the only computing term where both meanings are urgent.',
+ 'RTFM is not an insult, it is a manual.',
+ 'rm -rf is a quick way to learn which backups you never made.',
+ 'The cloud is just someone else\'s computer — with better uptime.',
+ 'A sysadmin never dies, they just go into /dev/null.',
+ 'Q: how many updates to change a lightbulb? A: none, it rebooted first.'
+];
+/* Страницы справки для man: n — одна строка NAME, s — SYNOPSIS,
+   d — строки DESCRIPTION. Чего нет в словаре, о том классически
+   отвечает «No manual entry for …» (про theme, open, exit, sudo…). */
+const TERM_MAN={
+ help:{n:'list the available commands',s:'help',
+  d:['Prints every command this console understands.']},
+ fetch:{n:'system summary in the style of fastfetch',s:'fetch | neofetch',
+  d:['Two columns: an ASCII logo and key/value fields',
+     'about the machine and this browser. Numbers come',
+     'from /api/stats on the server.']},
+ cowsay:{n:'let a cow say your line',s:'cowsay <text>',
+  d:['The cow repeats your line in a speech balloon.',
+     'With no text she says a default greeting.',
+     'She has seen things. She does not judge.']},
+ fortune:{n:'print a random quip',s:'fortune',
+  d:['One of the built-in fortunes, picked at random.',
+     'Mostly true. Occasionally a threat.']},
+ cal:{n:'display a calendar',s:'cal [month] [year]',
+  d:['A month grid, Sunday first; today is green.',
+     'Month is a number (1-12) or a name (nov, dec).',
+     'With no arguments — the current month.']},
+ df:{n:'report file system disk space usage',s:'df',
+  d:['Size, used, available and use percentage for',
+     'every disk the server reports, mounted paths',
+     'last — just like the real thing.']},
+ free:{n:'report free and used memory',s:'free',
+  d:['Total, used and free memory of the server,',
+     'rounded the way the kernel rounds it.']},
+ ps:{n:'list the windows running right now',s:'ps',
+  d:['The server, the panel and every open window',
+     'with a fake PID and a real state: the active',
+     'window is marked R+, the resting ones are S.']},
+ date:{n:'print the current date and time',s:'date',
+  d:['Weekday, month, day, year and time, e.g.',
+     'Fri Nov 6 2026 21:03:14.']},
+ echo:{n:'display a line of text',s:'echo <text>',
+  d:['Prints its arguments exactly as typed.']},
+ uname:{n:'print system information',s:'uname [-a|-r|-s|-m]',
+  d:['-s kernel name, -r kernel release, -m machine,',
+     '-a everything at once. Values come from the',
+     'server, so they describe the host, not this PC.']},
+ uptime:{n:'report how long the server has been up',s:'uptime',
+  d:['Uptime, load average and the number of cores.']},
+ whoami:{n:'print the effective user name',s:'whoami',
+  d:['The name from CONFIG.term.user in config.js.']},
+ ls:{n:'list the panel folders',s:'ls',
+  d:['Counts files in pics/, music/ and skins/.']},
+ clear:{n:'clear the screen',s:'clear | cls',
+  d:['Empties the scrollback. The history of',
+     'commands survives: arrow up brings it back.']},
+ man:{n:'format and display the manual pages',s:'man <command>',
+  d:['This page, in the classic layout. Commands',
+     'without a page answer: No manual entry for <command>.']}
+};
 /* --- команды ------------------------------------------------------------ */
 const TERM_CMDS={
  help(){
@@ -3772,6 +3861,13 @@ const TERM_CMDS={
    'uname [-a|-r|-s|-m]      — OS, kernel, machine (from the server)',
    'uptime                   — how long the server has been up',
    'ls                       — pics/ music/ skins/ folders',
+   'cowsay <text>            — a cow says your line',
+   'fortune                  — a random quip',
+   'cal [month] [year]       — calendar of that month',
+   'df                       — disk usage table',
+   'free                     — memory usage',
+   'ps                       — open windows as processes',
+   'man <command>            — manual page for a command',
    'theme dark|light         — switch the panel theme',
    'open <window>            — open a window: server, viewer, monitor,',
    '                          music, help, term',
@@ -3816,6 +3912,142 @@ const TERM_CMDS={
   row('pics/',pics?(pics.images||[]).length+(pics.art||[]).length:null,'file');
   row('music/',music&&Array.isArray(music.tracks)?music.tracks.length:null,'track');
   row('skins/',skins&&Array.isArray(skins.skins)?skins.skins.length:null,'skin');
+ },
+ /* календарь как в cal: сетка месяца, воскресенье первым, сегодня зелёным */
+ cal(args){
+  const now=new Date();
+  let m=now.getMonth(),y=now.getFullYear();
+  const usage='usage: cal [month] [year]';
+  const a=String(args[0]||'').toLowerCase();
+  if(a){
+   let idx=-1;
+   if(/^\d{1,2}$/.test(a)){const n=Number(a);if(n>=1&&n<=12)idx=n-1}
+   else idx=CAL_MONTHS.findIndex(name=>name.toLowerCase().startsWith(a));
+   if(idx<0){termPrint(usage,'term-err');return}
+   m=idx;
+   if(args[1]!=null){
+    const yy=Number(args[1]);
+    if(!/^\d{4}$/.test(String(args[1]))||yy<1970||yy>2100){termPrint(usage,'term-err');return}
+    y=yy;
+   }
+  }
+  const days=new Date(y,m+1,0).getDate();
+  const start=new Date(y,m,1).getDay();
+  const head=CAL_WD_SHORT.map(d=>d.slice(0,2)).join(' ');   // Su Mo Tu … Sa
+  const title=CAL_MONTHS[m]+' '+y;
+  termPrint(' '.repeat(Math.max(0,Math.floor((head.length-title.length)/2)))+title);
+  termPrint(head,'term-hint');
+  let line='';
+  const flush=()=>{if(line){termPrintHtml(line.replace(/\s+$/,''));line=''}};
+  for(let i=0;i<start;i++)line+='  ';
+  for(let d=1;d<=days;d++){
+   const cell=String(d).padStart(2);
+   const today=(d===now.getDate()&&m===now.getMonth()&&y===now.getFullYear());
+   line+=today?'<span class="term-ok">'+cell+'</span>':cell;
+   if((start+d)%7===0)flush();else line+=' ';
+  }
+  flush();
+ },
+ /* df — таблица места на дисках, как у настоящей утилиты */
+ async df(){
+  const s=await termStats();
+  if(!s){termPrint('df: N/A — host unreachable','term-err');return}
+  const disks=Array.isArray(s.disks)?s.disks:[];
+  if(!disks.length){termPrint('df: the server reported no disks','term-hint');return}
+  const size=v=>v<=0?'0':v<1?Math.max(1,Math.round(v*1024))+'M':Math.round(v)+'G';
+  const rows=disks.map(d=>{
+   const tot=Number(d.total_gb)||0,free=Math.max(0,Number(d.free_gb)||0);
+   return [d.device_full||d.device||'?',size(tot),size(tot-free),size(free),
+           Math.round(Number(d.used)||0)+'%',d.mount||'?'];
+  });
+  const head=['Filesystem','Size','Used','Avail','Use%','Mounted on'];
+  const w=head.map((h,i)=>Math.max(h.length,...rows.map(r=>String(r[i]).length)));
+  /* колонка Filesystem по левому краю, числа по правому, Mounted on —
+     последняя, без паддинга: как у настоящей df */
+  const line=arr=>arr.map((v,i)=>
+    i===0?String(v).padEnd(w[i]):
+    i===5?String(v):
+    String(v).padStart(w[i])).join('  ');
+  termPrintHtml(termEsc(line(head)),'term-hint');
+  rows.forEach(r=>termPrintHtml(termEsc(line(r))));
+ },
+ /* free — память сервера одной строкой, как в линуксе */
+ async free(){
+  const s=await termStats();
+  if(!s){termPrint('free: N/A — host unreachable','term-err');return}
+  const tot=Number(s.mem_total_gb),pct=Number(s.mem_used);
+  if(!tot||!isFinite(pct)){termPrint('free: memory info unavailable','term-hint');return}
+  const used=tot*pct/100,rest=tot-used;
+  const f=v=>(v>=10?Math.round(v)+'Gi':v.toFixed(1)+'Gi');
+  termPrint(''.padEnd(15)+['total','used','free'].map(c=>c.padStart(12)).join(''),'term-hint');
+  termPrint('Mem:'.padEnd(15)+[tot,used,rest].map(v=>f(v).padStart(12)).join(''));
+ },
+ /* ps — «процессы» панели: сервер, окна и карточки сервисов */
+ ps(){
+  const rows=[['1','?','Ss','python3 server.py'],
+              ['100','pts/0','Sl','nerevar-hub panel']];
+  let pid=110;
+  const act=appWindows.find(w=>w.classList.contains('active'));
+  appWindows.forEach(w=>{
+   if(w.hidden)return;
+   rows.push([String(pid++),'pts/0',w===act?'R+':'S','window: '+winTitle(w)]);
+  });
+  CONFIG.services.forEach((svc,i)=>{
+   if(hiddenSvc.has(i))return;
+   rows.push([String(400+i),'?','S','service: '+(svc.name||('card '+(i+1)))]);
+  });
+  const head=['PID','TTY','STAT','CMD'];
+  const w0=Math.max(3,...rows.map(r=>r[0].length));
+  const line=arr=>arr[0].padStart(w0)+'  '+arr[1].padEnd(6)+'  '+
+                  arr[2].padEnd(4)+'  '+arr.slice(3).join(' ');
+  termPrintHtml(termEsc(line(head)),'term-hint');
+  rows.forEach(r=>termPrintHtml(termEsc(line(r))));
+ },
+ /* cowsay — корова говорит вашу фразу */
+ cowsay(args){
+  const W=40;
+  const text=(args.join(' ')||'Hello from the server!').trim();
+  const words=[];
+  text.split(/\s+/).forEach(w=>{
+   while(w.length>W){words.push(w.slice(0,W));w=w.slice(W)}   // длинное — кусками
+   words.push(w);
+  });
+  const lines=[];
+  let cur='';
+  words.forEach(w=>{
+   if(!cur)cur=w;
+   else if((cur+' '+w).length<=W)cur+=' '+w;
+   else {lines.push(cur);cur=w}
+  });
+  if(cur)lines.push(cur);
+  const width=Math.max(...lines.map(l=>l.length));
+  termPrint(' '+'_'.repeat(width+2));
+  lines.forEach(l=>termPrint('<'+l.padEnd(width)+'>'));
+  termPrint(' '+'-'.repeat(width+2));
+  TERM_COW.forEach(l=>termPrint(l));
+ },
+ /* fortune — случайная поговорка из встроенного списка */
+ fortune(){
+  termPrint(TERM_FORTUNES[Math.floor(Math.random()*TERM_FORTUNES.length)]);
+ },
+ /* man — страница справки в классическом виде */
+ man(args){
+  const key=String(args[0]||'').toLowerCase();
+  if(!key){
+   termPrint('What manual page do you want?','term-err');
+   termPrint("For example, try 'man cowsay'.",'term-hint');
+   return;
+  }
+  const page=TERM_MAN[key];
+  if(!page){termPrint('No manual entry for '+key,'term-err');return}
+  const tag=key.toUpperCase()+'(1)';
+  termPrint(tag.padEnd(26)+'nerevar-hub manual'.padEnd(24)+tag,'term-hint');
+  termPrint('');
+  termPrint('NAME');
+  termPrint('       '+key+' - '+page.n);
+  if(page.s){termPrint('');termPrint('SYNOPSIS');termPrint('       '+page.s)}
+  termPrint('');termPrint('DESCRIPTION');
+  page.d.forEach(l=>termPrint('       '+l));
  },
  theme(args){
   const want=String(args[0]||'').toLowerCase();
