@@ -4529,8 +4529,11 @@ function bjSettle(){
    else{const p=Math.floor(h.bet*1.5);ret=h.bet+p;verdict='BLACKJACK +'+p;cls='term-ok'}
   }
   else if(bjIsBJ(BJ.dealer)){verdict='lose (dealer blackjack)';cls='term-err'}
-  else if(dt.t>21||v.t>dt){ret=h.bet*2;verdict='win +'+h.bet;cls='term-ok'}
-  else if(v.t===dt){ret=h.bet;verdict='push';cls='term-hint'}
+  /* сравнение очков ТОЛЬКО по .t: dt и v — объекты {t,soft}, и сравнивать
+     их с числом напрямую нельзя (20 > {t:18} всегда false — рука,
+     бьющая дилера, уходила в «lose») */
+  else if(dt.t>21||v.t>dt.t){ret=h.bet*2;verdict='win +'+h.bet;cls='term-ok'}
+  else if(v.t===dt.t){ret=h.bet;verdict='push';cls='term-hint'}
   else{verdict='lose';cls='term-err'}
   BJ.balance+=ret;
   termPrint((BJ.hands.length>1?'Hand '+(i+1):'You')+' ('+bjVal(h.cards)+'): '+verdict,cls);
