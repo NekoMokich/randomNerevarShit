@@ -294,6 +294,13 @@
     Список поговорок для fortune — CONFIG.term.fortunes в config.js:
     массив строк, по одной на строку; правится там, index.html не
     трогаем, а пустой список команда отметит подсказкой.
+    Блэкджек (blackjack): игра против дилера по правилам казино —
+    3:2, дилер стоит на мягком 17, сплит до четырёх рук, удвоение,
+    страховка и сдача. Банк хранится на сервере (/api/balance ->
+    balance.json), стартовая сумма и минимум ставки —
+    CONFIG.term.blackjack. Пока идёт партия, ввод в консоли — это
+    ходы: h/s/d/p/u, число — ставка, q — выход, clear, help, reset;
+    остальные команды оболочки работают как обычно.
     fetch берёт данные оттуда же, откуда System Monitor, — GET /api/stats
     (там же host, os и kernel, их добавляет server.py), плюс то, что знает
     сам браузер: тема, шрифт, размер экрана, число окон и сервисов. Если
@@ -3630,6 +3637,11 @@ const termIn=document.querySelector('[data-term-in]');
 const termPromptEl=document.querySelector('[data-term-prompt]');
 let termHistory=[],termHistPos=-1,termStarted=false;
 
+/* Состояние игры в блэкджек (модуль — ниже, в конце раздела терминала).
+   Объявлено здесь: termRun смотрит на него при каждой строке ввода. */
+const BJ={active:false,state:null,balance:0,deck:[],dealer:[],hands:[],hand:0,
+          bet:0,ins:0,hideHole:true,splitUsed:false,quit:false,roundStart:0};
+
 /* Логотип для fetch: колонка считается по самой длинной строке, поэтому
    свой логотип (CONFIG.term.logo) может быть любой ширины. */
 const TERM_LOGO=[
@@ -3841,7 +3853,15 @@ const TERM_MAN={
      'commands survives: arrow up brings it back.']},
  man:{n:'format and display the manual pages',s:'man <command>',
   d:['This page, in the classic layout. Commands',
-     'without a page answer: No manual entry for <command>.']}
+     'without a page answer: No manual entry for <command>.']},
+ blackjack:{n:'play blackjack against the dealer',s:'blackjack [balance]',
+  d:['Hit, stand, double, split, insurance and surrender,',
+     'by the casino rules: blackjack pays 3:2, the dealer',
+     'stands on soft 17, up to four hands. The bank lives in',
+     '/api/balance on the server; the start sum and the',
+     'minimum bet are CONFIG.term.blackjack. While a round',
+     'is on, the console takes moves: h, s, d, p, u, a number',
+     'to bet, q to leave, clear, help, reset.']}
 };
 /* --- команды ------------------------------------------------------------ */
 const TERM_CMDS={
@@ -3863,6 +3883,7 @@ const TERM_CMDS={
    'free                     — memory usage',
    'ps                       — open windows as processes',
    'man <command>            — manual page for a command',
+   'blackjack                — play blackjack against the dealer',
    'theme dark|light         — switch the panel theme',
    'open <window>            — open a window: server, viewer, monitor,',
    '                          music, help, term',
@@ -4049,6 +4070,19 @@ const TERM_CMDS={
   termPrint('');termPrint('DESCRIPTION');
   page.d.forEach(l=>termPrint('       '+l));
  },
+ /* blackjack — игра против дилера (модуль в конце раздела терминала) */
+ async blackjack(args){
+  const sub=String(args[0]||'').toLowerCase();
+  if(BJ.active){
+   if(sub==='balance'){termPrint('Balance: '+BJ.balance);return}
+   bjRender();return;                      // стол ещё раз
+  }
+  if(sub==='balance'){await bjLoad();termPrint('Balance: '+BJ.balance);return}
+  if(sub&&sub!=='new'){termPrint('Usage: blackjack [balance]','term-hint');return}
+  await bjLoad();
+  bjStart();
+  bjRender();
+ },
  theme(args){
   const want=String(args[0]||'').toLowerCase();
   if(want!=='dark'&&want!=='light'){termPrint('usage: theme dark|light','term-err');return}
@@ -4082,6 +4116,8 @@ const TERM_CMDS={
 async function termRun(raw){
  const line=String(raw||'').trim();
  if(!line)return;
+ /* пока идёт партия в блэкджек, ввод уходит в игру (bjInput) */
+ if(BJ.active){await bjInput(line);return}
  const parts=line.split(/\s+/);
  const cmd=TERM_CMDS[parts[0].toLowerCase()];
  if(!cmd){termPrint('command not found: '+parts[0],'term-err');termPrint('Try "help".','term-hint');return}
@@ -4136,6 +4172,7 @@ function termShow(){termStart();termFocus()}
   }
   if(event.key==='Tab'){
    event.preventDefault();
+   if(BJ.active)return;                        // во время партии Tab молчит
    if(!termIn.value||/\s/.test(termIn.value))return;   // дописываем только первое слово
    const head=termIn.value.toLowerCase();
    const names=Object.keys(TERM_CMDS).filter(n=>n.indexOf(head)===0);
@@ -4151,6 +4188,371 @@ function termShow(){termStart();termFocus()}
   if(!sel)termFocus();
  });
 })();
+
+/* === Blackjack: игра против дилера прямо в консоли ======================
+   Команда blackjack (CONFIG.term.blackjack). Правила — как в казино:
+   блэкджек 3:2, дилер добирает до 17 и стоит на мягком 17, сплит до
+   четырёх рук (тузы — по одной карте, после сплита блэкджека не бывает),
+   удвоение на первых двух картах, страховка на тузе (при вашем
+   блэкджеке это «even money»), сдача возвращает половину ставки.
+   Банк живёт на сервере: GET/POST /api/balance -> balance.json;
+   стартовая сумма и минимум ставки — CONFIG.term.blackjack в config.js.
+   Пока партия активна, ввод консоли уходит в игру (termRun -> bjInput):
+   h/s/d/p/u — ходы, число — ставка, q — выход (недоигранная рука
+   доигрывается), clear — очистить экран, help — ходы партии, reset —
+   новый банк. Остальные команды оболочки (ls, date, theme…) работают
+   как обычно. === */
+const BJ_RANKS=['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+const BJ_SUITS=[{s:'♠'},{s:'♥',red:true},{s:'♦',red:true},{s:'♣'}];
+const BJ_MOVE={h:'h',hit:'h',s:'s',stand:'s',d:'d',double:'d',
+               p:'p',split:'p',u:'u',surrender:'u'};
+
+function bjCfg(){
+ const b=termCfg().blackjack||{};
+ const num=(v,d)=>{const n=Math.floor(Number(v));return isFinite(n)&&n>=0?n:d};
+ return {start:num(b.startBalance,1000),min:Math.max(1,num(b.minBet,10))};
+}
+/* банк: читается с сервера при старте партии, пишется после расчёта */
+async function bjLoad(){
+ try{
+  const r=await fetch('/api/balance',{cache:'no-store'});
+  if(r.ok){
+   const d=await r.json();
+   const n=Math.floor(Number(d&&d.balance));
+   if(isFinite(n)&&n>=0){BJ.balance=n;return}
+  }
+ }catch(e){}
+ BJ.balance=bjCfg().start;    // сервер не ответил — стартовая сумма в памяти
+}
+function bjSave(){            // не ждём: игра не должна дёргаться на сети
+ fetch('/api/balance',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({balance:BJ.balance})}).catch(()=>{});
+}
+
+/* --- колоды и очки ------------------------------------------------------ */
+function bjTen(c){return c.r==='10'||c.r==='J'||c.r==='Q'||c.r==='K'}
+function bjTotal(cards){
+ let t=0,aces=0;
+ cards.forEach(c=>{
+  if(c.r==='A'){t+=11;aces++}
+  else t+=bjTen(c)?10:Number(c.r);
+ });
+ while(t>21&&aces){t-=10;aces--}
+ return {t,soft:aces>0&&t<=21};
+}
+function bjIsBJ(cards){return cards.length===2&&bjTotal(cards).t===21}
+function bjPair(cards){return cards.length===2&&cards[0].r===cards[1].r}
+function bjNewDeck(){
+ const deck=[];
+ BJ_RANKS.forEach(r=>BJ_SUITS.forEach(u=>deck.push({r,s:u.s,red:!!u.red})));
+ for(let i=deck.length-1;i>0;i--){          // тасовка Фишера — Йетса
+  const j=Math.floor(Math.random()*(i+1));
+  const t=deck[i];deck[i]=deck[j];deck[j]=t;
+ }
+ return deck;
+}
+function bjDraw(){if(!BJ.deck.length)BJ.deck=bjNewDeck();return BJ.deck.shift()}
+
+/* --- рисование стола ---------------------------------------------------- */
+function bjFace(c){
+ if(!c)return ' ? ';                        // закрытая карта дилера
+ const rk=c.r.padStart(2);                  // '10' | ' A' | ' 9' — три знака
+ return c.red?rk+'<span class="term-err">'+c.s+'</span>':rk+c.s;
+}
+function bjRows(cards){                     // три строки блоков карт рядом
+ return [cards.map(()=> '┌───┐').join(' '),
+         cards.map(c=>'│'+bjFace(c)+'│').join(' '),
+         cards.map(c=>'└───┘').join(' ')];
+}
+function bjVal(cards){
+ const v=bjTotal(cards);
+ if(v.t>21)return String(v.t);
+ return v.soft?'soft '+v.t:String(v.t);
+}
+function bjTable(){                         // «дилер + руки», без подсказки
+ const out=[];
+ const hole=i=>i===1&&BJ.hideHole;
+ out.push('Dealer');
+ bjRows(BJ.dealer.map((c,i)=>hole(i)?null:c)).forEach(r=>out.push(r));
+ out.push('  ('+bjVal(BJ.dealer.filter((c,i)=>!hole(i)))+')');
+ BJ.hands.forEach((h,i)=>{
+  const active=BJ.state==='play'&&i===BJ.hand;
+  out.push((active?'→ ':'')+(BJ.hands.length>1?'Hand '+(i+1):'You')+
+           ' (bet '+h.bet+')');
+  bjRows(h.cards).forEach(r=>out.push(r));
+  const v=bjTotal(h.cards);
+  let s='  ('+bjVal(h.cards)+')';
+  if(v.t>21)s+=' BUST';
+  else if(!h.split&&bjIsBJ(h.cards))s+=' BLACKJACK';
+  if(h.surrender)s+=' SURRENDER';
+  out.push(s);
+ });
+ return out;
+}
+function bjShow(){bjTable().forEach(r=>termPrintHtml(r))}
+/* строки стола содержат HTML (красные масти ♥♦), поэтому печатаются
+   построчно через termPrintHtml — по одному div на строку, как termPrint */
+function bjMoves(){                         // подсказка — только своевременное
+ const h=BJ.hands[BJ.hand];
+ const m=['[h]it','[s]tand'];
+ if(h&&h.cards.length===2){
+  if(BJ.balance>=h.bet)m.push('[d]ouble');
+  if(BJ.balance>=h.bet&&BJ.hands.length<4&&bjPair(h.cards))m.push('[p]lit');
+  if(BJ.hands.length===1&&!BJ.splitUsed)m.push('[u]rsurrender');
+ }
+ return m.join(' ');
+}
+function bjRender(){
+ if(!BJ.active)return;
+ if(BJ.state==='bet'){
+  const c=bjCfg();
+  if(BJ.balance<c.min){
+   termPrint('Balance: '+BJ.balance+' — the bank is empty.','term-err');
+   termPrint('Type "reset" for a fresh '+c.start+'.','term-hint');
+   return;
+  }
+  termPrint('Balance: '+BJ.balance);
+  termPrint('Your bet ('+c.min+' … '+BJ.balance+') or q to leave:','term-hint');
+  return;
+ }
+ const rows=['Balance: '+BJ.balance];     // банк виден всю партию, не только в расчёте
+ bjTable().forEach(r=>rows.push(r));
+ if(BJ.state==='ins')rows.push('','Insurance? [y/n] — half the bet, pays 2:1');
+ if(BJ.state==='play')rows.push('','Move? '+bjMoves());
+ rows.forEach(r=>termPrintHtml(r));
+}
+function bjStart(){
+ const c=bjCfg();
+ BJ.active=true;BJ.state='bet';BJ.quit=false;
+ BJ.hands=[];BJ.dealer=[];BJ.hand=0;BJ.bet=0;BJ.ins=0;
+ BJ.splitUsed=false;BJ.hideHole=true;
+ termPrint('Blackjack — dealer stands on soft 17, blackjack pays 3:2','term-key');
+ termPrint('Insurance on an ace pays 2:1, surrender returns half the bet.');
+ termPrint('The bank is kept on the server (start '+c.start+', min bet '+c.min+').','term-hint');
+}
+function bjEnd(){
+ BJ.active=false;BJ.state=null;BJ.quit=false;
+ BJ.hands=[];BJ.dealer=[];
+ termPrint('Left the table. Balance: '+BJ.balance,'term-hint');
+}
+function bjReset(){
+ BJ.balance=bjCfg().start;
+ bjSave();
+ termPrint('Fresh bankroll: '+BJ.balance,'term-ok');
+ bjRender();
+}
+function bjHelp(){
+ termPrint('Blackjack commands:','term-key');
+ termPrint('  h — hit, s — stand, d — double, p — split, u — surrender');
+ termPrint('  a number — bet, q — leave, clear — clear the screen,');
+ termPrint('  reset — new bankroll, blackjack — show the table again');
+ termPrint('Dealer stands on soft 17, blackjack pays 3:2, insurance 2:1.');
+}
+
+/* --- ввод партии: сюда уходит всё, что ввёл игрок ----------------------- */
+async function bjInput(raw){
+ const line=String(raw||'').trim();
+ if(!line)return;
+ const low=line.toLowerCase();
+ const parts=line.split(/\s+/);
+ const first=parts[0].toLowerCase();
+ if(low==='clear'||low==='cls'){termClear();bjRender();return}
+ if(first==='blackjack'){                 // blackjack reset|balance|повтор
+  const sub=String(parts[1]||'').toLowerCase();
+  if(sub==='reset'&&BJ.state==='bet'){bjReset();return}
+  if(sub==='balance'){termPrint('Balance: '+BJ.balance);return}
+  bjRender();return;
+ }
+ if(low==='q'||low==='quit'||low==='exit'){bjQuit();return}
+ if(low==='help'||low==='?'||low==='moves'||low==='rules'){bjHelp();return}
+ if(low==='reset'&&BJ.state==='bet'){bjReset();return}
+ /* остальные команды оболочки работают как обычно */
+ if(TERM_CMDS[first]){await TERM_CMDS[first](parts.slice(1),line);return}
+ if(BJ.state==='bet'){bjBet(low);return}
+ if(BJ.state==='ins'){
+  if(low==='y'||low==='yes'||low==='i'||low==='insurance'){bjInsurance(true);return}
+  if(low==='n'||low==='no'){bjInsurance(false);return}
+  termPrint('Insurance? [y/n]','term-hint');return;
+ }
+ if(BJ.state==='play'){
+  const k=BJ_MOVE[low];
+  if(k){bjMove(k);return}
+  termPrint('Move? '+bjMoves(),'term-hint');return;
+ }
+}
+function bjQuit(){
+ if(BJ.state==='bet'){bjEnd();return}
+ BJ.quit=true;                             // руку доигрываем — и уходим
+ if(BJ.state==='ins'){bjInsurance(false);return}
+ if(BJ.state==='play'){
+  termPrint('Leaving the table — your hands stand.','term-hint');
+  BJ.hands.forEach(h=>{h.done=true});
+  bjDealerTurn();
+ }
+}
+
+/* --- ставка и раздача ---------------------------------------------------- */
+function bjBet(low){
+ const c=bjCfg();
+ if(!/^\d+$/.test(low)){
+  termPrint('Type a number from '+c.min+' to '+BJ.balance,'term-err');
+  return;
+ }
+ const bet=Number(low);
+ if(bet<c.min){termPrint('Minimum bet is '+c.min,'term-err');return}
+ if(bet>BJ.balance){termPrint('Not enough: the bank is '+BJ.balance,'term-err');return}
+ BJ.roundStart=BJ.balance;
+ BJ.balance-=bet;
+ BJ.bet=bet;
+ bjDeal();
+}
+function bjDeal(){
+ BJ.deck=bjNewDeck();
+ BJ.hands=[{cards:[],bet:BJ.bet,done:false,split:false}];
+ BJ.dealer=[];BJ.ins=0;BJ.hideHole=true;BJ.splitUsed=false;BJ.hand=0;
+ for(let i=0;i<2;i++){                     // игрок, дилер, игрок, дилер
+  BJ.hands[0].cards.push(bjDraw());
+  BJ.dealer.push(bjDraw());
+ }
+ const up=BJ.dealer[0];
+ if(up.r==='A'){BJ.state='ins';bjRender();return}   // страховка, потом пик
+ if(bjTen(up)&&bjIsBJ(BJ.dealer)){          // пик на десятке
+  BJ.hideHole=false;bjShow();bjSettle();return;
+ }
+ if(bjIsBJ(BJ.hands[0].cards)){             // сразу расчёт блэкджека
+  BJ.hideHole=false;bjShow();bjSettle();return;
+ }
+ BJ.state='play';bjRender();
+}
+function bjInsurance(take){
+ const ins=Math.floor(BJ.bet/2);
+ if(take){
+  if(BJ.balance<ins){
+   termPrint('Not enough for insurance ('+ins+')','term-err');
+   termPrint('Insurance? [y/n]','term-hint');
+   return;
+  }
+  BJ.balance-=ins;BJ.ins=ins;
+ }
+ if(bjIsBJ(BJ.dealer)){BJ.hideHole=false;bjShow();bjSettle();return}
+ if(bjIsBJ(BJ.hands[0].cards)){BJ.hideHole=false;bjShow();bjSettle();return}
+ if(BJ.quit){BJ.hands.forEach(h=>{h.done=true});bjDealerTurn();return}
+ BJ.state='play';bjRender();
+}
+
+/* --- ходы игрока --------------------------------------------------------- */
+function bjMove(k){
+ if(BJ.state!=='play')return;
+ const h=BJ.hands[BJ.hand];
+ if(!h||h.done)return;
+ if(k==='h'){
+  h.cards.push(bjDraw());
+  const v=bjTotal(h.cards);
+  if(v.t>21){h.bust=true;h.done=true;bjShow();termPrint('Bust ('+v.t+')','term-err');bjNext();return}
+  if(v.t===21){h.done=true;bjShow();bjNext();return}
+  bjRender();return;
+ }
+ if(k==='s'){h.done=true;bjNext();return}
+ if(k==='d'){
+  if(h.cards.length!==2||BJ.balance<h.bet){
+   termPrint('Double needs two cards and '+h.bet+' in the bank','term-err');
+   bjRender();return;
+  }
+  BJ.balance-=h.bet;h.bet*=2;h.doubled=true;
+  h.cards.push(bjDraw());h.done=true;
+  const v=bjTotal(h.cards);
+  bjShow();
+  if(v.t>21){h.bust=true;termPrint('Bust ('+v.t+')','term-err')}
+  bjNext();return;
+ }
+ if(k==='p'){
+  if(h.cards.length!==2||!bjPair(h.cards)){
+   termPrint('Split needs a pair','term-err');bjRender();return;
+  }
+  if(BJ.hands.length>=4){termPrint('Four hands is the limit','term-err');bjRender();return}
+  if(BJ.balance<h.bet){termPrint('Not enough to split','term-err');bjRender();return}
+  const bet=h.bet;
+  BJ.balance-=bet;
+  BJ.splitUsed=true;
+  const moved=h.cards.pop();               // вторая карта уходит в новую руку
+  h.split=true;
+  const nh={cards:[moved],bet,done:false,split:true};
+  h.cards.push(bjDraw());
+  nh.cards.push(bjDraw());
+  BJ.hands.push(nh);
+  if(h.cards[0].r==='A'){                  // после сплита тузов — по карте
+   h.done=true;nh.done=true;
+   termPrint('One card per ace','term-hint');
+  }
+  bjShow();
+  if(h.done)bjNext();else bjRender();
+  return;
+ }
+ if(k==='u'){
+  if(h.cards.length!==2||BJ.hands.length!==1||BJ.splitUsed){
+   termPrint('Surrender only as the very first move','term-err');
+   bjRender();return;
+  }
+  const back=Math.floor(h.bet/2);
+  BJ.balance+=back;h.done=true;h.surrender=true;
+  termPrint('Surrender — '+back+' back (half the bet)','term-hint');
+  bjNext();return;
+ }
+}
+function bjNext(){                          // рука закончена — следующая
+ while(BJ.hand<BJ.hands.length&&BJ.hands[BJ.hand].done)BJ.hand++;
+ if(BJ.hand<BJ.hands.length){BJ.state='play';bjRender();return}
+ bjDealerTurn();
+}
+function bjDealerTurn(){
+ BJ.state='settle';
+ BJ.hideHole=false;
+ const alive=BJ.hands.some(h=>!h.bust&&!h.surrender);
+ if(alive)while(bjTotal(BJ.dealer).t<17)BJ.dealer.push(bjDraw());
+ bjShow();
+ bjSettle();
+}
+
+/* --- расчёт -------------------------------------------------------------- */
+function bjSettle(){
+ BJ.state='settle';
+ const dt=bjTotal(BJ.dealer);
+ termPrint('Dealer: '+bjVal(BJ.dealer)+(dt.t>21?' — bust':''),
+           dt.t>21?'term-ok':'term-hint');
+ BJ.hands.forEach((h,i)=>{
+  const v=bjTotal(h.cards);
+  let ret=0,verdict,cls;
+  if(h.surrender){verdict='surrender';cls='term-hint'}
+  else if(v.t>21){verdict='bust';cls='term-err'}
+  else if(!h.split&&bjIsBJ(h.cards)){
+   if(bjIsBJ(BJ.dealer)){ret=h.bet;verdict='push (dealer blackjack)';cls='term-hint'}
+   else{const p=Math.floor(h.bet*1.5);ret=h.bet+p;verdict='BLACKJACK +'+p;cls='term-ok'}
+  }
+  else if(bjIsBJ(BJ.dealer)){verdict='lose (dealer blackjack)';cls='term-err'}
+  else if(dt.t>21||v.t>dt){ret=h.bet*2;verdict='win +'+h.bet;cls='term-ok'}
+  else if(v.t===dt){ret=h.bet;verdict='push';cls='term-hint'}
+  else{verdict='lose';cls='term-err'}
+  BJ.balance+=ret;
+  termPrint((BJ.hands.length>1?'Hand '+(i+1):'You')+' ('+bjVal(h.cards)+'): '+verdict,cls);
+ });
+ if(BJ.ins){
+  if(bjIsBJ(BJ.dealer)){
+   const back=BJ.ins*3;                    // ставка назад плюс 2:1
+   BJ.balance+=back;
+   termPrint('Insurance pays 2:1 +'+(back-BJ.ins),'term-ok');
+  }else termPrint('Insurance lost '+BJ.ins,'term-err');
+ }
+ const delta=BJ.balance-BJ.roundStart;
+ const ds=(delta>0?'+':'')+delta;
+ termPrint('Balance: '+BJ.balance+'   ('+ds+')',
+           delta>0?'term-ok':delta<0?'term-err':'term-hint');
+ bjSave();
+ if(BJ.quit){bjEnd();return}
+ BJ.hands=[];BJ.dealer=[];BJ.ins=0;BJ.hand=0;BJ.bet=0;
+ BJ.splitUsed=false;BJ.hideHole=true;BJ.quit=false;
+ BJ.state='bet';
+ bjRender();
+}
 
 /* --- Где встанет терминал ------------------------------------------------
    Ищет место по сетке (шаг 20) среди чужих окон: сначала то, куда окно

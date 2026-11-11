@@ -22,6 +22,10 @@ Nerevar Hub — локальный сервер веб-панели + отдач
   POST /api/layout -> сохранить раскладку (JSON-объект до 64 КБ);
                       записывается атомарно, одинакова для всех устройств
   DELETE /api/layout -> сбросить раскладку (удалить layout.json)
+  GET /api/balance  -> банк игрока в блэкджеке (balance.json);
+                      404, если партий ещё не было
+  POST /api/balance -> сохранить банк ({"balance": N}: целое 0..10^9);
+                      записывается атомарно, как и раскладка
   GET /favicon.ico -> 204 (чтобы в консоли браузера не было 404)
 
 Файл config.js (рядом с index.html) — все настройки панели: имя сервера,
@@ -111,6 +115,12 @@ DEFAULT_PIDFILE = os.path.join(BASE_DIR, "server.pid")
 LAYOUT_PATH = os.path.join(BASE_DIR, "layout.json")
 LAYOUT_MAX = 64 * 1024          # потолок размера раскладки, байт
 LAYOUT_LOCK = threading.Lock()   # писать могут несколько вкладок сразу
+
+# Банк игрока в блэкджеке (команда blackjack в окне Terminal);
+# пишется через POST /api/balance, читается при старте партии
+BALANCE_PATH = os.path.join(BASE_DIR, "balance.json")
+BALANCE_MAX = 1024               # на банк уходит один крошечный JSON
+BALANCE_LOCK = threading.Lock()
 
 # Что вообще готовы отдавать из pics/. Расширение — маленькими буквами.
 # HTML/JS/XML сюда не попадают принципиально: даже svg, который браузер
@@ -861,6 +871,18 @@ def make_handler(index_path, metrics, allow_cors, pics_dir=None, music_dir=None,
                     return
                 self._send(200, payload, "application/json; charset=utf-8",
                            {"Cache-Control": "no-store"})
+            elif path == "/api/balance":
+                # банк в блэкджеке: нет файла — 404 (панель даст стартовую
+                # сумму из config.js и запишет её при первом расчёте)
+                try:
+                    with open(BALANCE_PATH, "rb") as fh:
+                        payload = fh.read()
+                except OSError:
+                    self._send(404, "no saved balance",
+                               "text/plain; charset=utf-8")
+                    return
+                self._send(200, payload, "application/json; charset=utf-8",
+                           {"Cache-Control": "no-store"})
             elif path == "/favicon.ico":
                 self._send(204, b"", "image/x-icon")
             elif path.startswith("/pics/"):
@@ -872,12 +894,17 @@ def make_handler(index_path, metrics, allow_cors, pics_dir=None, music_dir=None,
             else:
                 self._send(404, "not found", "text/plain; charset=utf-8")
 
-        # --- раскладка окон: сохранение / сброс ------------------------- #
+        # --- сохранение: раскладка окон и банк в блэкджеке ------------- #
         def do_POST(self):
             path = self.path.split("?", 1)[0]
-            if path != "/api/layout":
+            is_balance = path == "/api/balance"
+            if path != "/api/layout" and not is_balance:
                 self._send(404, "not found", "text/plain; charset=utf-8")
                 return
+            target = BALANCE_PATH if is_balance else LAYOUT_PATH
+            limit = BALANCE_MAX if is_balance else LAYOUT_MAX
+            label = "balance" if is_balance else "layout"
+            lock = BALANCE_LOCK if is_balance else LAYOUT_LOCK
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
@@ -885,9 +912,9 @@ def make_handler(index_path, metrics, allow_cors, pics_dir=None, music_dir=None,
             if length <= 0:
                 self._send(400, "empty body", "text/plain; charset=utf-8")
                 return
-            if length > LAYOUT_MAX:
+            if length > limit:
                 # панель шлёт объект до 64 КБ — больше не бывает
-                self._send(413, "layout too big (max %d bytes)" % LAYOUT_MAX,
+                self._send(413, "%s too big (max %d bytes)" % (label, limit),
                            "text/plain; charset=utf-8")
                 return
             body = self.rfile.read(length)
@@ -900,21 +927,32 @@ def make_handler(index_path, metrics, allow_cors, pics_dir=None, music_dir=None,
                 self._send(400, "JSON object expected",
                            "text/plain; charset=utf-8")
                 return
+            if is_balance:
+                # банк в блэкджеке: ровно одно целое число, без сюрпризов
+                bank = data.get("balance")
+                if isinstance(bank, bool) or not isinstance(bank, int) \
+                        or not 0 <= bank <= 10 ** 9:
+                    self._send(400, "balance must be an integer 0..1000000000",
+                               "text/plain; charset=utf-8")
+                    return
+                payload = json.dumps({"balance": bank}).encode("utf-8")
+            else:
+                payload = json.dumps(data).encode("utf-8")
             # переписываем через tmp + os.replace: читатели в другой вкладке
             # всегда получат либо старый, либо новый файл, никогда — обрывок
-            tmp_path = LAYOUT_PATH + ".tmp"
+            tmp_path = target + ".tmp"
             try:
-                with LAYOUT_LOCK:
+                with lock:
                     with open(tmp_path, "wb") as fh:
-                        fh.write(json.dumps(data).encode("utf-8"))
-                    os.replace(tmp_path, LAYOUT_PATH)
+                        fh.write(payload)
+                    os.replace(tmp_path, target)
             except OSError as exc:
-                self.log_message("layout: не записать: %s", exc)
+                self.log_message("%s: не записать: %s", label, exc)
                 try:
                     os.remove(tmp_path)
                 except OSError:
                     pass
-                self._send(500, "cannot save layout: %s" % exc,
+                self._send(500, "cannot save %s: %s" % (label, exc),
                            "text/plain; charset=utf-8")
                 return
             self._send(200, '{"ok":true}', "application/json; charset=utf-8",
@@ -1139,6 +1177,9 @@ def main():
     print("  раскладка : /api/layout -> %s%s"
           % (LAYOUT_PATH, "" if os.path.isfile(LAYOUT_PATH)
              else "  (ещё не сохранялась)"))
+    print("  банк      : /api/balance -> %s%s"
+          % (BALANCE_PATH, "" if os.path.isfile(BALANCE_PATH)
+             else "  (блэкджек ещё не игрался)"))
     print("  скины     : /skins/  -> %s%s"
           % (SKINS_DIR, "" if os.path.isdir(SKINS_DIR) else "  (папки пока нет)"))
     print("  index     : %s" % INDEX_PATH)

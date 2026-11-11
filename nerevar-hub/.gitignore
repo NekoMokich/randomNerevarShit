@@ -5,6 +5,10 @@ server.pid
 layout.json
 layout.json.tmp
 
+# банк игрока в блэкджеке (POST /api/balance) — тоже личные данные
+balance.json
+balance.json.tmp
+
 # свои треки и скины в репозиторий не кладём: это чужие файлы и личный
 # контент. Лежат локально, в git идут только README.md этих папок.
 music/*
