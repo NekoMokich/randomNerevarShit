@@ -268,9 +268,12 @@
     Окно-пародия на консоль (File → Terminal): чёрный экран, моноширинный
     шрифт, приглашение «user@server:~$». Ввод прямо в окне: Enter выполняет,
     ↑/↓ вспоминают историю, Tab дописывает имя команды.
-    Таких окон два: второе открывается кнопкой «+» в конце строки ввода,
-    кнопкой в таскбаре или командой «open term2». Они работают параллельно:
-    у каждого экземпляра своя история ввода, свой стартовый вывод и своя
+    Сколько таких окон — CONFIG.term.count (1..6, по умолчанию 2): все
+    создаются при загрузке и открываются сразу. Кнопка «+» в конце строки
+    ввода прыгает на следующее окно по кругу, кнопка в таскбаре или
+    команда «open term2» / «open term3»… открывает нужное. Окна работают
+    параллельно: у каждого экземпляра своя история ввода, свой стартовый
+    вывод и своя
     партия блэкджека (банк общий — файл balance.json на сервере), а
     очередь ввода (termJob/termCtx ниже) не даёт строке одного окна уехать
     в вывод другого, пока предыдущая ещё ждёт сеть.
@@ -293,7 +296,8 @@
         man <команда>       — страница справки (или «No manual entry»)
         theme dark|light    — переключить тему панели
         open <окно>         — открыть окно: server, viewer, monitor,
-                              music, help, term, term2
+                              music, help, term, term2… (сколько их —
+                              CONFIG.term.count)
         about               — имя и версия панели
         exit                — закрыть окно терминала
         sudo <команда>      — шутка
@@ -314,7 +318,8 @@
     Что печатать при запуске — CONFIG.term.startup: строка печатается как
     есть, строка, начинающаяся с '$ ', выполняется как команда, поэтому
     ['…приветствие…', '$ fetch'] — приветствие и сразу сводка о системе.
-    Там же: enabled / windowTitle / icon / startOpen / размер окна /
+    Там же: enabled / count (сколько окон на экране) / windowTitle /
+    icon / startOpen / размер окна /
     user (имя в приглашении) и logo — свой логотип для fetch.
 
   ==========================================================================
@@ -536,9 +541,10 @@ body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14
 /* --- Терминал (окно-пародия на консоль) ----------------------------------
    Консоль всегда чёрная с моноширинным шрифтом — в обеих темах, как
    настоящий терминал; рамка, заголовок и кнопки — обычные, общие.
-   Таких окон два (второе открывается кнопкой «+» в строке ввода,
-   кнопкой в таскбаре или командой `open term2` — см. TERMS ниже). */
-#winTerm,#winTerm2{min-width:300px;min-height:170px}
+   Сколько таких окон — решает CONFIG.term.count (1..6, см. TERMS ниже):
+   каждое открывается кнопкой «+» в строке ввода (следующее по кругу),
+   своей кнопкой в таскбаре или командой `open term2` / `open term3`… */
+.appwindow[id^="winTerm"]{min-width:300px;min-height:170px}
 .term-body{display:flex;flex-direction:column;min-height:0;
  padding:0;border:0;background:#0b0b0b;overflow:hidden}
 .term-out{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 8px;outline:none;
@@ -781,23 +787,25 @@ html[data-theme=dark] ::-webkit-scrollbar-button{background:#3a3a3a;border:2px o
       <form class="term-row" data-term-form autocomplete="off">
         <span class="term-prompt" data-term-prompt>nerevar@server:~$</span>
         <input class="term-in" data-term-in type="text" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Command">
-        <button type="button" class="term-new" data-term-new title="Second terminal">+</button>
+        <button type="button" class="term-new" data-term-new title="Next terminal">+</button>
       </form>
     </div>
     <div class="resize-grip" data-resize></div>
   </section>
 
-  <!-- Второй терминал: тот же набор узлов, что и первый (свои data-* —
-       скрипт строит из них экземпляр TERMS), но своё состояние: история
-       ввода, партия блэкджека и стартовый вывод живут отдельно. -->
+  <!-- Второй терминал: тот же набор узлов, что и первый (одни и те же
+       data-* — скрипт строит из них экземпляр TERMS), но своё состояние:
+       история ввода, партия блэкджека и стартовый вывод живут отдельно.
+       Он же шаблон: при CONFIG.term.count > 2 окно копируется дальше
+       (winTerm3…), при count = 1 убирается. -->
   <section class="appwindow" id="winTerm2" hidden>
-    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-term-icon>&gt;</span><span data-term2-title>Terminal 2</span></div><div class="window-controls"><span class="winbtn" data-win-min="winTerm2">_</span><span class="winbtn" data-win-max="winTerm2">□</span><span class="winbtn" data-win-close="winTerm2">×</span></div></div>
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-term-icon>&gt;</span><span data-term-title>Terminal 2</span></div><div class="window-controls"><span class="winbtn" data-win-min="winTerm2">_</span><span class="winbtn" data-win-max="winTerm2">□</span><span class="winbtn" data-win-close="winTerm2">×</span></div></div>
     <div class="winbody term-body">
       <div class="term-out" data-term-out tabindex="0"></div>
       <form class="term-row" data-term-form autocomplete="off">
         <span class="term-prompt" data-term-prompt>nerevar@server:~$</span>
-        <input class="term-in" data-term-in type="text" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Command (second terminal)">
-        <button type="button" class="term-new" data-term-new title="First terminal">+</button>
+        <input class="term-in" data-term-in type="text" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Command (terminal 2)">
+        <button type="button" class="term-new" data-term-new title="Next terminal">+</button>
       </form>
     </div>
     <div class="resize-grip" data-resize></div>
@@ -810,7 +818,7 @@ html[data-theme=dark] ::-webkit-scrollbar-button{background:#3a3a3a;border:2px o
   <button class="task" data-window="winMonitor"><span class="ticon" data-monitor-icon>M</span><span class="tlabel" data-monitor-title>System Monitor</span></button>
   <button class="task" data-window="winMusic"><span class="ticon" data-music-icon>A</span><span class="tlabel" data-music-title>Audio Player</span></button>
   <button class="task" data-window="winTerm"><span class="ticon" data-term-icon>&gt;</span><span class="tlabel" data-term-title>Terminal</span></button>
-  <button class="task" data-window="winTerm2"><span class="ticon" data-term-icon>&gt;</span><span class="tlabel" data-term2-title>Terminal 2</span></button>
+  <button class="task" data-window="winTerm2"><span class="ticon" data-term-icon>&gt;</span><span class="tlabel" data-term-title>Terminal 2</span></button>
   <span class="spacer"></span>
   <div class="clock" id="clock"><span class="ctime" data-clock-time>--:--</span><span class="cdate" data-clock-date>--</span></div>
 </div>
@@ -1145,23 +1153,28 @@ function applyConfig(){
  const monBtn=document.querySelector('.task[data-window="winMonitor"]');
  if(monWin)monWin.hidden=mon.enabled===false;
  if(monBtn)monBtn.hidden=mon.enabled===false;
- /* терминал: заголовок, иконка, включение и состояние на старте */
+ /* терминалы: сколько их — CONFIG.term.count (окна клонируются до
+    вызова applyConfig — см. cloneTermWindows ниже); заголовок у каждого
+    свой:
+    первый «Terminal», дальше — «Terminal N». Включены и открыты — все
+    разом, раскладка решит позже, останутся ли они открытыми */
  const tcfg=CONFIG.term||{};
  const tOff=tcfg.enabled===false;
- document.querySelectorAll('[data-term-title]').forEach(el=>{el.textContent=tcfg.windowTitle||'Terminal'});
- /* второй терминал — тот же заголовок с «2», чтобы в палитре раскладки
-    и в списке окон два экземпляра не выглядели одинаковыми */
- document.querySelectorAll('[data-term2-title]').forEach(el=>{el.textContent=(tcfg.windowTitle||'Terminal')+' 2'});
+ const tOpen=tcfg.startOpen!==false;
+ document.querySelectorAll('[data-term-title]').forEach(el=>{
+  const n=termIndex(el);
+  el.textContent=(tcfg.windowTitle||'Terminal')+(n>1?' '+n:'');
+ });
  document.querySelectorAll('[data-term-icon]').forEach(el=>{el.textContent=tcfg.icon||'>'});
- const tWin=document.getElementById('winTerm');
- const tWin2=document.getElementById('winTerm2');
- const tBtn=document.querySelector('.task[data-window="winTerm"]');
- const tBtn2=document.querySelector('.task[data-window="winTerm2"]');
  const tMenu=document.querySelector('.menu button[data-action="terminal"]');
- if(tWin)tWin.hidden=tOff||tcfg.startOpen===false;   // раскладка решит позже
- if(tWin2)tWin2.hidden=true;   // закрыто; раскладка решит, открыть ли его
- if(tBtn)tBtn.hidden=tOff;
- if(tBtn2)tBtn2.hidden=tOff;
+ termWindows().forEach(win=>{
+  win.hidden=tOff||!tOpen;                 // раскладка решит позже
+  const n=termNum(win.id);
+  const input=win.querySelector('[data-term-in]');
+  if(input)input.setAttribute('aria-label',n>1?'Command (terminal '+n+')':'Command');
+  const btn=document.querySelector('.task[data-window="'+win.id+'"]');
+  if(btn)btn.hidden=tOff;
+ });
  if(tMenu)tMenu.hidden=tOff;
  document.querySelectorAll('[data-term-prompt]').forEach(el=>{
   el.textContent=(tcfg.user||'nerevar')+'@'+(CONFIG.serverName||'server')+':~$';
@@ -1205,6 +1218,55 @@ function viewerCount(){
  let winAnchor=tpl,taskAnchor=task;
  for(let i=2;i<=viewerCount();i++){
   const id='winArt'+i;
+  const win=tpl.cloneNode(true);
+  win.id=id;
+  ['min','max','close'].forEach(k=>{
+   const el=win.querySelector('[data-win-'+k+']');
+   if(el)el.setAttribute('data-win-'+k,id);
+  });
+  winAnchor.parentNode.insertBefore(win,winAnchor.nextSibling);
+  winAnchor=win;
+  if(task){
+   const btn=task.cloneNode(true);
+   btn.dataset.window=id;
+   taskAnchor.parentNode.insertBefore(btn,taskAnchor.nextSibling);
+   taskAnchor=btn;
+  }
+ }
+})();
+/* --- Терминалы: сколько консолей на экране — решает config.js -------------
+   #winTerm — первое окно, #winTerm2 — второе (оно же шаблон для копий).
+   count = 1 — второе окно и его кнопка в таскбаре убираются; count = 3..6 —
+   окна копируются здесь же, ДО applyConfig(): тот расписывает заголовки,
+   иконки и подписи querySelectorAll'ем по всей странице. Все окна
+   открываются сразу (startOpen), дальше живут как обычные окна раскладки:
+   закрываются крестиком, запоминаются в layout.json. */
+function termCount(){
+ const n=Number((CONFIG.term||{}).count);
+ if(!isFinite(n))return 2;                  // по умолчанию два окна
+ return Math.min(6,Math.max(1,Math.round(n)));
+}
+function isTermWin(w){return !!w&&/^winTerm\d*$/.test(w.id||'')}
+function termWindows(){return Array.from(document.querySelectorAll('.appwindow')).filter(isTermWin)}
+function termNum(id){const m=/^winTerm(\d*)$/.exec(id||'');return m?(m[1]?Number(m[1]):1):1}
+/* у какого терминала этот узел: он лежит либо в самом окне, либо в его
+   кнопке в таскбаре — номер читаем по id (winTerm -> 1, winTerm3 -> 3) */
+function termIndex(el){
+ const host=el.closest('.appwindow')||el.closest('.task');
+ return termNum(host?(host.id||host.dataset.window||''):'');
+}
+(function cloneTermWindows(){
+ const tpl=document.getElementById('winTerm2');
+ const task=document.querySelector('.task[data-window="winTerm2"]');
+ if(termCount()<2){
+  if(tpl&&tpl.parentNode)tpl.parentNode.removeChild(tpl);
+  if(task&&task.parentNode)task.parentNode.removeChild(task);
+  return;
+ }
+ if(!tpl||!tpl.parentNode)return;
+ let winAnchor=tpl,taskAnchor=task;
+ for(let i=3;i<=termCount();i++){
+  const id='winTerm'+i;
   const win=tpl.cloneNode(true);
   win.id=id;
   ['min','max','close'].forEach(k=>{
@@ -1729,7 +1791,7 @@ function showWindow(win,show){
  if(show){focusWindow(win);fitAscii();
   if(win.dataset.autoplace==='1')placeMonitor();
   if(win.id==='winMusic')placeMusic();
-  if(win.id==='winTerm'||win.id==='winTerm2'){
+  if(isTermWin(win)){
    const t=termByWin(win);
    placeTerm(win);
    if(t)termShow(t);
@@ -2174,7 +2236,18 @@ function placeMonitor(){
     spot=best||{x:m,y:Math.max(m,sh-hardH-m),w:hardW,h:hardH};
   }
 
-  if(spot.avail==null)spot.avail=Math.max(hardH,sh-m-spot.y);
+  if(spot.avail==null){
+    /* Своё место выбрано в обход fitAt (маленький экран): рост вниз всё
+       равно ограничиваем чужими окнами — иначе монитор вырос бы natural
+       высотой контента поверх просмотрщика. */
+    let lim=sh-m-spot.y;
+    for(const r of taken){
+      if(r.x+PAD>=spot.x+spot.w||r.x+r.w-PAD<=spot.x)continue;
+      if(r.y+r.h<=spot.y+PAD)continue;
+      lim=Math.min(lim,r.y-PAD-spot.y);
+    }
+    spot.avail=Math.max(hardH,lim);
+  }
 
   if(body)body.classList.toggle('compact',spot.w<300);
 
@@ -3070,9 +3143,19 @@ function layoutWindows(force){
   servers.style.maxHeight=(sh-2*m)+'px';
   servers.dataset.maximized='0';
   autoSizeArt(force);
-  placeMonitor();     // монитор встаёт первым — терминал объезжает его
-  placeTerm();
-  placeMusic();
+  /* Монитор встаёт первым — терминал объезжает его. Но пока терминалы
+     стоят без координат (окна только что созданы или сброшены), монитор
+     занимает слишком широкое место и терминалы встают внахлёст. Поэтому
+     расставляем в три захода: на втором монитор видит припаркованные
+     терминалы и сужается (место освобождается), на третьем — подрастает
+     под уже вставшие окна. Раскладка сходится за один вызов — так
+     initLayout и resetLayout обходятся без ожидания следующего тика
+     монитора. */
+  for(let pass=0;pass<3;pass++){
+    placeMonitor();
+    placeTerm();
+    placeMusic();
+  }
 }
 
 /* === Конструктор раскладки ================================================
@@ -3154,10 +3237,11 @@ function applySavedLayout(data){
     const restoredGeo=[];        // просмотрщики, монитор, терминал: задумано и нарисовано
     appWindows.forEach(w=>{
       const rec=data.wins[w.id];if(!rec)return;
-      /* второй терминал ещё не открывали — координат в раскладке нет,
-         место он займёт сам при первом открытии (иначе — центр экрана
-         поверх всех окон) */
-      if(w.id==='winTerm2'&&rec.x==null&&rec.y==null)return;
+      /* Терминал, которого раскладка ещё не двигала (координат в записи
+         нет): геометрию пропускаем — место он займёт сам через placeTerm,
+         иначе центр экрана поверх всех окон, — а открыто/закрыто
+         применяем: закрытое окно не должно приезжать обратно */
+      const termAuto=isTermWin(w)&&rec.x==null&&rec.y==null;
       /* геометрия: доля -> пиксели, затем зажимаем внутрь сцены */
       const autoW=rec.w==null,autoH=rec.h==null;
       w.style.right='auto';w.style.bottom='auto';
@@ -3169,28 +3253,29 @@ function applySavedLayout(data){
       const rw=w.offsetWidth||0,rh=w.offsetHeight||0;
       let x=rec.x==null?null:Math.round(rec.x*sw);
       let y=rec.y==null?null:Math.round(rec.y*sh);
-      if(x==null||y==null){                     // координат нет — центрируем
-        if(x==null)x=Math.round((sw-rw)/2);
-        if(y==null)y=Math.round((sh-rh)/2);
+      if(!termAuto){
+        if(x==null||y==null){                   // координат нет — центрируем
+          if(x==null)x=Math.round((sw-rw)/2);
+          if(y==null)y=Math.round((sh-rh)/2);
+        }
+        x=Math.min(Math.max(x,0),Math.max(0,sw-rw));
+        y=Math.min(Math.max(y,0),Math.max(0,sh-rh));
+        w.style.left=x+'px';w.style.top=y+'px';
+        /* позиция восстановлена — авто-расстановки её больше не трогают */
+        w.dataset.manual='1';
+        if(w.id==='winMusic')w.dataset.placed='1';
       }
-      x=Math.min(Math.max(x,0),Math.max(0,sw-rw));
-      y=Math.min(Math.max(y,0),Math.max(0,sh-rh));
-      w.style.left=x+'px';w.style.top=y+'px';
-      /* позиция восстановлена — авто-расстановки её больше не трогают */
-      w.dataset.manual='1';
-      if(w.id==='winMusic')w.dataset.placed='1';
       /* открыто/закрыто (выключенные в config.js окна остаются закрытыми) */
       const offByConfig=(w.id==='winMusic'&&musicCfg().enabled===false)||
                         (w.id==='winMonitor'&&(CONFIG.monitor||{}).enabled===false)||
-                        (w.id==='winTerm'&&termCfg().enabled===false)||
-                        (w.id==='winTerm2'&&termCfg().enabled===false);
+                        (isTermWin(w)&&termCfg().enabled===false);
       const wantOpen=!offByConfig&&!!rec.open;
       w.hidden=!wantOpen;
       if(!wantOpen){const btn=taskFor(w);if(btn)btn.classList.remove('active');}
       if(wantOpen&&rec.max)setMaximized(w,true);
       /* геометрия для проверки накладок ниже: plan — как задумано раскладкой
          (доли без зажатия внутрь сцены), rect — как окно реально нарисовалось */
-      if(!w.hidden&&(isViewer(w)||w.id==='winMonitor'||w.id==='winTerm'||w.id==='winTerm2')&&w.dataset.maximized!=='1'){
+      if(!termAuto&&!w.hidden&&(isViewer(w)||w.id==='winMonitor'||isTermWin(w))&&w.dataset.maximized!=='1'){
         const rw2=w.offsetWidth||0,rh2=w.offsetHeight||0;
         restoredGeo.push({w,isViewer:isViewer(w),
           rect:{x,y,w:rw2,h:rh2},
@@ -3328,19 +3413,17 @@ function resetLayout(){
       /* окна открываем как задумано по умолчанию (с учётом config.js) */
       const offByConfig=(w.id==='winMusic'&&musicCfg().enabled===false)||
                         (w.id==='winMonitor'&&(CONFIG.monitor||{}).enabled===false)||
-                        (w.id==='winTerm'&&termCfg().enabled===false)||
-                        (w.id==='winTerm2'&&termCfg().enabled===false);
+                        (isTermWin(w)&&termCfg().enabled===false);
       let wantOpen=!offByConfig;
       if(w.id==='winMusic')wantOpen=wantOpen&&!!musicCfg().startOpen;
-      if(w.id==='winTerm')wantOpen=wantOpen&&termCfg().startOpen!==false;
-      if(w.id==='winTerm2')wantOpen=false;   // второй — только вручную или из раскладки
+      if(isTermWin(w))wantOpen=wantOpen&&termCfg().startOpen!==false;   // все консоли сразу
       w.hidden=!wantOpen;
       if(!wantOpen){const btn=taskFor(w);if(btn)btn.classList.remove('active');}
       /* терминал ставится ПОСЛЕ монитора, поэтому его старая геометрия
          (например, после перетаскивания) воспринималась бы монитором как
          занятое место и сдвигала бы его на крайний вариант с наложением.
          Reset — значит «всё на места», чистим координаты перед перекладкой */
-      if(w.id==='winTerm'||w.id==='winTerm2'){w.style.left='';w.style.top='';w.style.width='';w.style.height='';}
+      if(isTermWin(w)){w.style.left='';w.style.top='';w.style.width='';w.style.height='';}
     });
     hiddenSvc=new Set();
     renderServices();
@@ -3697,17 +3780,23 @@ const BJ0={active:false,state:null,balance:0,deck:[],dealer:[],hands:[],hand:0,
 /* Экземпляры строятся из DOM: окно, его узлы и своё состояние.
    История (history/histPos) живёт только здесь — её трогают обработчики
    ввода своего окна, поэтому глобальной она не нужна. */
-const TERMS=['winTerm','winTerm2'].map(id=>{
- const win=document.getElementById(id);
- if(!win)return null;
+const TERMS=termWindows().map(win=>{
+ const id=win.id;
  return {id,win,
   out:win.querySelector('[data-term-out]'),
   in:win.querySelector('[data-term-in]'),
   prompt:win.querySelector('[data-term-prompt]'),
   history:[],histPos:-1,started:false,
   bj:Object.assign({},BJ0)};
-}).filter(Boolean);
+});
 let BJ=BJ0;                           // партия текущего контекста
+
+/* имена для команды open: обычные окна + свои ключи каждого терминала */
+function openWinKeys(){
+ const keys=['server','viewer','monitor','music','help'];
+ TERMS.forEach((t,i)=>keys.push(i?'term'+(i+1):'term'));
+ return keys;
+}
 
 function termByWin(win){return TERMS.find(t=>t.win===win)}
 function termCtx(t){                  // переключить общий код на экземпляр
@@ -3976,7 +4065,7 @@ const TERM_CMDS={
    'blackjack                — play blackjack against the dealer',
    'theme dark|light         — switch the panel theme',
    'open <window>            — open a window: server, viewer, monitor,',
-   '                          music, help, term, term2 (2nd terminal)',
+   '                          music, help, '+openWinKeys().slice(4).join(', ')+' (each its own console)',
    'about                    — what this panel is',
    'exit                     — close this window',
    'sudo <command>           — nice try'].forEach(l=>termPrint('  '+l));
@@ -4185,10 +4274,12 @@ const TERM_CMDS={
   const key=String(args[0]||'').toLowerCase();
   if(key==='help'){runAction('help');termPrint('Opened: Help','term-ok');return}
   const map={server:'winServers',servers:'winServers',viewer:'winArt',viewers:'winArt',
-             picture:'winArt',monitor:'winMonitor',music:'winMusic',audio:'winMusic',
-             term:'winTerm',terminal:'winTerm',term2:'winTerm2',terminal2:'winTerm2'};
+             picture:'winArt',monitor:'winMonitor',music:'winMusic',audio:'winMusic'};
+  /* у каждого терминала свой ключ: term, term2, term3… (сколько их — count) */
+  TERMS.forEach((t,i)=>{const n=i+1;map['term'+n]=t.id;map['terminal'+n]=t.id});
+  if(TERMS.length){map.term=TERMS[0].id;map.terminal=TERMS[0].id}
   const id=map[key];
-  if(!id){termPrint('usage: open <server|viewer|monitor|music|help|term|term2>','term-err');return}
+  if(!id){termPrint('usage: open <'+openWinKeys().join('|')+'>','term-err');return}
   const win=document.getElementById(id);
   const btn=taskFor(win);
   if(!win||(btn&&btn.hidden)){termPrint('That window is switched off in config.js','term-err');return}
@@ -4243,12 +4334,16 @@ function termShow(t){
    очереди не ждут, а всё, что печатает или играет, идёт через termJob. */
 (function initTerm(){
  TERMS.forEach(t=>{
-  /* «+» в конце строки ввода: прыгнуть на второй терминал (и обратно) */
+  /* «+» в конце строки ввода: следующий терминал по кругу — если тот
+     закрыт, он откроется; при count=1 кнопка не нужна */
   const jump=t.win.querySelector('[data-term-new]');
-  if(jump)jump.addEventListener('click',()=>{
-   const other=TERMS.find(x=>x!==t);
-   if(other)showWindow(other.win,true);
-  });
+  if(jump){
+   if(TERMS.length<2)jump.hidden=true;
+   else jump.addEventListener('click',()=>{
+    const next=TERMS[(TERMS.indexOf(t)+1)%TERMS.length];
+    if(next)showWindow(next.win,true);
+   });
+  }
   t.in.addEventListener('keydown',event=>{
    if(event.key==='Enter'){
     event.preventDefault();
@@ -4667,18 +4762,22 @@ function bjSettle(){
  bjRender();
 }
 
-/* --- Где встанет терминал ------------------------------------------------
+/* --- Где встанут терминалы ------------------------------------------------
    Ищет место по сетке (шаг 20) среди чужих окон: сначала то, куда окно
-   влезает ЦЕЛИКОМ (желаемый размер), из них — ближайшее к правому верхнему
-   углу, там, где оно и должно стоять; если такого нет — самое вместительное.
-   Препятствия — окно Server, просмотрщики, System Monitor и перетащенный
-   руками аудиоплеер. Ручное положение самого терминала не трогаем. */
-/* Ставит терминал(ы) в свободное место. Без аргумента — все открытые
-   экземпляры по очереди: второй объезжает первый (см. taken ниже). */
+   влезает ЦЕЛИКОМ, из них — ближайшее к правому верхнему углу, там, где
+   оно и должно стоять; если такого нет — самое вместительное. Препятствия —
+   окно Server, просмотрщики, System Monitor и перетащенный руками
+   аудиоплеер; ручное положение самих терминалов не трогаем.
+   Ставит терминал(ы) в свободное место. Без аргумента — все открытые
+   экземпляры ОДНИМ заходом: каждый при полном размере съедает место,
+   которое нужно соседу (сверху узкая полоса), поэтому сначала ищем точку
+   минимального размера для каждого, а потом раздаём полный размер по
+   очереди — кому хватает. Кому места не хватило вовсе — минимальное
+   перекрытие, как на совсем маленьком экране. С аргументом — только это
+   окно (остальные терминалы для него препятствия). */
 function placeTerm(win){
- if(!win){TERMS.forEach(t=>placeTerm(t.win));return}
- if(win.hidden||win.dataset.maximized==='1')return;
- if(win.dataset.manual==='1'){clampWindow(win);return}
+ if(win&&(win.hidden||win.dataset.maximized==='1'))return;
+ if(win&&win.dataset.manual==='1'){clampWindow(win);return}
  const cfg=termCfg();
  const sw=scene.clientWidth,sh=scene.clientHeight,m=10,PAD=6;
  const hardW=300,hardH=170;                       // предел ужатия = min-size окна
@@ -4694,9 +4793,20 @@ function placeTerm(win){
     из раскладки: сам он встаёт по центру, объезжать его бессмысленно */
  const music=document.getElementById('winMusic');
  if(music&&!music.hidden&&music.dataset.manual==='1')taken.push(rectInScene(music));
- /* второй терминал — препятствие для первого (и наоборот): два экземпляра
-    не должны вставать друг на друга */
- TERMS.forEach(t=>{if(t.win!==win&&!t.win.hidden)taken.push(rectInScene(t.win))});
+ /* что переставляем (todo), а что только объезжаем */
+ const todo=[];
+ TERMS.forEach(t=>{
+  if(win){
+   if(t.win===win)todo.push(t);
+   else if(!t.win.hidden)taken.push(rectInScene(t.win));
+   return;
+  }
+  if(t.win.hidden)return;
+  if(t.win.dataset.maximized==='1'){taken.push(rectInScene(t.win));return}
+  if(t.win.dataset.manual==='1'){clampWindow(t.win);taken.push(rectInScene(t.win));return}
+  todo.push(t);
+ });
+ if(!todo.length)return;
  const hits=(x,y,w,h)=>taken.some(r=>x<r.x+r.w+PAD&&r.x<x+w+PAD&&y<r.y+r.h+PAD&&r.y<y+h+PAD);
  /* Насколько можно развернуться из точки (x,y), не трогая чужие окна:
     вправо — до сцены или ближайшего препятствия, вниз — так же. */
@@ -4722,46 +4832,66 @@ function placeTerm(win){
   return {x:Math.round(x),y:Math.round(y),w,h};
  };
  const corner=r=>{const dx=sw-m-(r.x+r.w),dy=r.y-m;return dx*dx+dy*dy};
- let full=null,best=null;
- for(let y=m;y+hardH<=sh-m+1;y+=20){
-  for(let x=m;x+hardW<=sw-m+1;x+=20){
-   const r=fitAt(x,y,wantW,wantH);
-   if(!r)continue;
-   if(r.w===wantW&&r.h===wantH){
-    if(!full||corner(r)<corner(full))full=r;
-   }else if(!best||r.w*r.h>best.w*best.h||
-            (r.w*r.h===best.w*best.h&&corner(r)<corner(best)))best=r;
+ const findSpot=(w0,h0)=>{
+  let full=null,best=null;
+  for(let y=m;y+hardH<=sh-m+1;y+=20){
+   for(let x=m;x+hardW<=sw-m+1;x+=20){
+    const r=fitAt(x,y,w0,h0);
+    if(!r)continue;
+    if(r.w===w0&&r.h===h0){
+     if(!full||corner(r)<corner(full))full=r;
+    }else if(!best||r.w*r.h>best.w*best.h||
+             (r.w*r.h===best.w*best.h&&corner(r)<corner(best)))best=r;
+   }
   }
+  return full||best;
+ };
+ /* фаза 1: точка минимального размера для каждого — так все гарантированно
+    влезут в узкую полосу сверху, не съедая место соседа полным размером */
+ const spots=new Map();
+ for(const t of todo){
+  const r=findSpot(hardW,hardH);
+  if(r){spots.set(t,r);taken.push(r)}
  }
- let spot=full||best;
- if(!spot){
-  /* Свободного места нет (маленький экран) — ближайшая свободная точка
-     от центра; если и её нет — минимальное перекрытие (см. ниже). */
+ /* фаза 2: теперь каждому — полный размер из config, кому хватает места */
+ for(const t of todo){
+  const cur=spots.get(t);
+  if(!cur)continue;
+  taken.splice(taken.indexOf(cur),1);              // своё место освободили
+  const r=findSpot(wantW,wantH);
+  if(r){spots.set(t,r);taken.push(r)}
+  else taken.push(cur);                            // не вырос — остаёмся
+ }
+ /* фаза 3: кому точки не нашлось вовсе — минимальное перекрытие
+    (маленький экран; как у System Monitor) */
+ for(const t of todo){
+  if(spots.get(t))continue;
   const p=dodgeWindows(Math.round((sw-hardW)/2),Math.round((sh-hardH)/2),
                        hardW,hardH,taken,sw,sh,m);
-  spot={x:p.x,y:p.y,w:hardW,h:hardH};
-  /* Свободной точки нет — встаём туда, где меньше всего перекрытий
-     (как System Monitor): иначе окно осталось бы ровно по центру поверх
-     всех окон сразу. */
+  let spot={x:p.x,y:p.y,w:hardW,h:hardH};
   if(taken.some(r=>overlapArea(spot,r)>0)){
    let worst=Infinity;
    for(let y=m;y+hardH<=sh-m+1;y+=20){
     for(let x=m;x+hardW<=sw-m+1;x+=20){
      const r={x,y,w:hardW,h:hardH};
      let score=0;
-     for(const t of taken)score+=overlapArea(r,t);
+     for(const t2 of taken)score+=overlapArea(r,t2);
      if(score<worst){worst=score;spot=r}
     }
    }
   }
+  spots.set(t,spot);taken.push(spot);
  }
- win.style.width=spot.w+'px';
- win.style.height=spot.h+'px';
- win.style.left=spot.x+'px';
- win.style.top=spot.y+'px';
- win.style.right='auto';
- win.style.bottom='auto';
- win.dataset.maximized='0';
+ todo.forEach(t=>{
+  const spot=spots.get(t);
+  t.win.style.width=spot.w+'px';
+  t.win.style.height=spot.h+'px';
+  t.win.style.left=spot.x+'px';
+  t.win.style.top=spot.y+'px';
+  t.win.style.right='auto';
+  t.win.style.bottom='auto';
+  t.win.dataset.maximized='0';
+ });
 }
 
 (async function initLayout(){
