@@ -8,7 +8,9 @@ Nerevar Hub — локальный сервер веб-панели + отдач
   GET /config.js   -> настройки панели (объект CONFIG: имя сервера,
                       адреса, сервисы, монитор, аудио-плеер, скины)
   GET /api/stats   -> JSON с метриками процессора, памяти, загрузки,
-                      дисков и RAID-массивов
+                      дисков и RAID-массивов, плюс статичные поля
+                      sysname/host/os/kernel/machine (их показывает
+                      команда fetch в окне Terminal панели)
   GET /pics/<имя>  -> картинка или ascii-арт из папки pics/ (только чтение)
   GET /api/pics    -> JSON со списком файлов в pics/ (имена картинок и артов)
   GET /music/<имя> -> аудиофайл из папки music/ (Range: перемотка работает)
@@ -163,6 +165,50 @@ MIB = 1024.0 ** 3  # ГБ
 
 
 # --------------------------------------------------------------------------- #
+#  Статичная информация о системе: sysname / host / os / kernel / machine.
+#  Считается один раз и отдаётся в /api/stats — её же показывает команда
+#  fetch в окне Terminal панели (см. CONFIG.term в config.js).
+# --------------------------------------------------------------------------- #
+_SYS_INFO = None
+
+
+def read_os_release():
+    """PRETTY_NAME из /etc/os-release — «Debian GNU/Linux 12 (bookworm)»."""
+    try:
+        with open("/etc/os-release", "r", encoding="utf-8") as fh:
+            for line in fh:
+                key, sep, value = line.partition("=")
+                if sep and key.strip() == "PRETTY_NAME":
+                    return value.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return "Linux"
+
+
+def system_info():
+    """Словарь с именем системы, хостом, ядром и архитектурой. Кэшируется."""
+    global _SYS_INFO
+    if _SYS_INFO is None:
+        try:
+            u = os.uname()
+            sysname, host = u.sysname, u.nodename
+            kernel, machine = u.release, u.machine
+        except (AttributeError, OSError):        # не Linux — просто пустое
+            sysname = host = kernel = machine = ""
+        os_name = read_os_release()
+        if machine and machine not in os_name:   # архитектура — в конец строки
+            os_name = "%s %s" % (os_name, machine)
+        _SYS_INFO = {
+            "sysname": sysname,
+            "host": host,
+            "os": os_name,
+            "kernel": kernel,
+            "machine": machine,
+        }
+    return _SYS_INFO
+
+
+# --------------------------------------------------------------------------- #
 #  Метрики
 # --------------------------------------------------------------------------- #
 class SystemMetrics:
@@ -308,7 +354,15 @@ class SystemMetrics:
         except OSError:
             load1 = None
 
+        info = system_info()
         return {
+            # статичное (для команды fetch в терминале панели)
+            "sysname": info["sysname"],
+            "host": info["host"],
+            "os": info["os"],
+            "kernel": info["kernel"],
+            "machine": info["machine"],
+            # метрики
             "cpu": cpu,
             "load1": load1,
             "cores": os.cpu_count() or 1,
