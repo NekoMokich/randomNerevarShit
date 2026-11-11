@@ -268,6 +268,12 @@
     Окно-пародия на консоль (File → Terminal): чёрный экран, моноширинный
     шрифт, приглашение «user@server:~$». Ввод прямо в окне: Enter выполняет,
     ↑/↓ вспоминают историю, Tab дописывает имя команды.
+    Таких окон два: второе открывается кнопкой «+» в конце строки ввода,
+    кнопкой в таскбаре или командой «open term2». Они работают параллельно:
+    у каждого экземпляра своя история ввода, свой стартовый вывод и своя
+    партия блэкджека (банк общий — файл balance.json на сервере), а
+    очередь ввода (termJob/termCtx ниже) не даёт строке одного окна уехать
+    в вывод другого, пока предыдущая ещё ждёт сеть.
     Команды:
         help                — список команд
         fetch / neofetch    — сводка о системе в духе fastfetch
@@ -287,7 +293,7 @@
         man <команда>       — страница справки (или «No manual entry»)
         theme dark|light    — переключить тему панели
         open <окно>         — открыть окно: server, viewer, monitor,
-                              music, help, term
+                              music, help, term, term2
         about               — имя и версия панели
         exit                — закрыть окно терминала
         sudo <команда>      — шутка
@@ -529,8 +535,10 @@ body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14
 
 /* --- Терминал (окно-пародия на консоль) ----------------------------------
    Консоль всегда чёрная с моноширинным шрифтом — в обеих темах, как
-   настоящий терминал; рамка, заголовок и кнопки — обычные, общие. */
-#winTerm{min-width:300px;min-height:170px}
+   настоящий терминал; рамка, заголовок и кнопки — обычные, общие.
+   Таких окон два (второе открывается кнопкой «+» в строке ввода,
+   кнопкой в таскбаре или командой `open term2` — см. TERMS ниже). */
+#winTerm,#winTerm2{min-width:300px;min-height:170px}
 .term-body{display:flex;flex-direction:column;min-height:0;
  padding:0;border:0;background:#0b0b0b;overflow:hidden}
 .term-out{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 8px;outline:none;
@@ -548,6 +556,11 @@ body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14
 .term-in{flex:1 1 auto;min-width:0;padding:0;border:0;outline:none;
  background:transparent;color:#dcdcdc;caret-color:#3ff06a;
  font:13px "DejaVu Sans Mono","Lucida Console",Consolas,monospace}
+/* «+» в конце строки ввода: прыгает на второй терминал (и обратно) */
+.term-new{flex:0 0 auto;width:20px;height:17px;padding:0;
+ background:#1c1c1c;border:1px solid #4a4a4a;border-radius:2px;
+ color:#7f7f7f;font:12px/1 var(--ui-font);cursor:default}
+.term-new:hover{color:#dcdcdc;border-color:#8a8a8a}
 
 /* --- Скины плеера (Qmmp = Winamp 2) ------------------------------------ */
 /* Панель выбора скина: список из skins/ + кнопка «прочитать .wsz с диска» */
@@ -768,6 +781,23 @@ html[data-theme=dark] ::-webkit-scrollbar-button{background:#3a3a3a;border:2px o
       <form class="term-row" data-term-form autocomplete="off">
         <span class="term-prompt" data-term-prompt>nerevar@server:~$</span>
         <input class="term-in" data-term-in type="text" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Command">
+        <button type="button" class="term-new" data-term-new title="Second terminal">+</button>
+      </form>
+    </div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <!-- Второй терминал: тот же набор узлов, что и первый (свои data-* —
+       скрипт строит из них экземпляр TERMS), но своё состояние: история
+       ввода, партия блэкджека и стартовый вывод живут отдельно. -->
+  <section class="appwindow" id="winTerm2" hidden>
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-term-icon>&gt;</span><span data-term2-title>Terminal 2</span></div><div class="window-controls"><span class="winbtn" data-win-min="winTerm2">_</span><span class="winbtn" data-win-max="winTerm2">□</span><span class="winbtn" data-win-close="winTerm2">×</span></div></div>
+    <div class="winbody term-body">
+      <div class="term-out" data-term-out tabindex="0"></div>
+      <form class="term-row" data-term-form autocomplete="off">
+        <span class="term-prompt" data-term-prompt>nerevar@server:~$</span>
+        <input class="term-in" data-term-in type="text" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Command (second terminal)">
+        <button type="button" class="term-new" data-term-new title="First terminal">+</button>
       </form>
     </div>
     <div class="resize-grip" data-resize></div>
@@ -780,6 +810,7 @@ html[data-theme=dark] ::-webkit-scrollbar-button{background:#3a3a3a;border:2px o
   <button class="task" data-window="winMonitor"><span class="ticon" data-monitor-icon>M</span><span class="tlabel" data-monitor-title>System Monitor</span></button>
   <button class="task" data-window="winMusic"><span class="ticon" data-music-icon>A</span><span class="tlabel" data-music-title>Audio Player</span></button>
   <button class="task" data-window="winTerm"><span class="ticon" data-term-icon>&gt;</span><span class="tlabel" data-term-title>Terminal</span></button>
+  <button class="task" data-window="winTerm2"><span class="ticon" data-term-icon>&gt;</span><span class="tlabel" data-term2-title>Terminal 2</span></button>
   <span class="spacer"></span>
   <div class="clock" id="clock"><span class="ctime" data-clock-time>--:--</span><span class="cdate" data-clock-date>--</span></div>
 </div>
@@ -1118,15 +1149,23 @@ function applyConfig(){
  const tcfg=CONFIG.term||{};
  const tOff=tcfg.enabled===false;
  document.querySelectorAll('[data-term-title]').forEach(el=>{el.textContent=tcfg.windowTitle||'Terminal'});
+ /* второй терминал — тот же заголовок с «2», чтобы в палитре раскладки
+    и в списке окон два экземпляра не выглядели одинаковыми */
+ document.querySelectorAll('[data-term2-title]').forEach(el=>{el.textContent=(tcfg.windowTitle||'Terminal')+' 2'});
  document.querySelectorAll('[data-term-icon]').forEach(el=>{el.textContent=tcfg.icon||'>'});
  const tWin=document.getElementById('winTerm');
+ const tWin2=document.getElementById('winTerm2');
  const tBtn=document.querySelector('.task[data-window="winTerm"]');
+ const tBtn2=document.querySelector('.task[data-window="winTerm2"]');
  const tMenu=document.querySelector('.menu button[data-action="terminal"]');
  if(tWin)tWin.hidden=tOff||tcfg.startOpen===false;   // раскладка решит позже
+ if(tWin2)tWin2.hidden=true;   // закрыто; раскладка решит, открыть ли его
  if(tBtn)tBtn.hidden=tOff;
+ if(tBtn2)tBtn2.hidden=tOff;
  if(tMenu)tMenu.hidden=tOff;
- const tPrompt=document.querySelector('[data-term-prompt]');
- if(tPrompt)tPrompt.textContent=(tcfg.user||'nerevar')+'@'+(CONFIG.serverName||'server')+':~$';
+ document.querySelectorAll('[data-term-prompt]').forEach(el=>{
+  el.textContent=(tcfg.user||'nerevar')+'@'+(CONFIG.serverName||'server')+':~$';
+ });
  const wt=document.querySelector('.welcome h1');
  if(wt)wt.textContent=CONFIG.welcomeTitle;
  const wp=document.querySelector('.welcome p');
@@ -1690,7 +1729,11 @@ function showWindow(win,show){
  if(show){focusWindow(win);fitAscii();
   if(win.dataset.autoplace==='1')placeMonitor();
   if(win.id==='winMusic')placeMusic();
-  if(win.id==='winTerm'){placeTerm();termShow();}}
+  if(win.id==='winTerm'||win.id==='winTerm2'){
+   const t=termByWin(win);
+   placeTerm(win);
+   if(t)termShow(t);
+  }}
  else{const btn=taskFor(win);if(btn)btn.classList.remove('active');}
  /* открыли или закрыли просмотрщик — доли пересчитываются: закрытые окна
     места не занимают, остальные разъезжаются на свободное; терминал и
@@ -1993,8 +2036,7 @@ function autoSizeViewer(v,force){
   });
   const mon=document.getElementById('winMonitor');
   if(mon&&!mon.hidden&&mon.dataset.manual==='1')blocked.push(rectInScene(mon));
-  const term=document.getElementById('winTerm');
-  if(term&&!term.hidden&&term.dataset.manual==='1')blocked.push(rectInScene(term));
+  TERMS.forEach(t=>{if(!t.win.hidden&&t.win.dataset.manual==='1')blocked.push(rectInScene(t.win))});
   const pos=dodgeWindows(px,py,parseFloat(win.style.width),parseFloat(win.style.height),
                          blocked,sw,sh,m);
   win.style.left=pos.x+'px';win.style.top=pos.y+'px';
@@ -2047,8 +2089,7 @@ function placeMonitor(){
   /* терминал — тоже препятствие (монитор встаёт первым, терминал его
      объезжает): монитор не должен заехать на чужой «чёрный экран».
      Окно ещё не расставлено (нет left) — места у него нет, не мешаем. */
-  const term=document.getElementById('winTerm');
-  if(term&&!term.hidden&&term.style.left)taken.push(rectInScene(term));
+  TERMS.forEach(t=>{if(!t.win.hidden&&t.win.style.left)taken.push(rectInScene(t.win))});
   const sR=taken[0]?taken[0].x+taken[0].w:m;      // правая кромка серверного окна
   const sB=taken[0]?taken[0].y+taken[0].h:m;      // низ серверного окна
   const aL=artRects.length?Math.min.apply(null,artRects.map(r=>r.x)):sw-m;
@@ -3113,6 +3154,10 @@ function applySavedLayout(data){
     const restoredGeo=[];        // просмотрщики, монитор, терминал: задумано и нарисовано
     appWindows.forEach(w=>{
       const rec=data.wins[w.id];if(!rec)return;
+      /* второй терминал ещё не открывали — координат в раскладке нет,
+         место он займёт сам при первом открытии (иначе — центр экрана
+         поверх всех окон) */
+      if(w.id==='winTerm2'&&rec.x==null&&rec.y==null)return;
       /* геометрия: доля -> пиксели, затем зажимаем внутрь сцены */
       const autoW=rec.w==null,autoH=rec.h==null;
       w.style.right='auto';w.style.bottom='auto';
@@ -3137,14 +3182,15 @@ function applySavedLayout(data){
       /* открыто/закрыто (выключенные в config.js окна остаются закрытыми) */
       const offByConfig=(w.id==='winMusic'&&musicCfg().enabled===false)||
                         (w.id==='winMonitor'&&(CONFIG.monitor||{}).enabled===false)||
-                        (w.id==='winTerm'&&termCfg().enabled===false);
+                        (w.id==='winTerm'&&termCfg().enabled===false)||
+                        (w.id==='winTerm2'&&termCfg().enabled===false);
       const wantOpen=!offByConfig&&!!rec.open;
       w.hidden=!wantOpen;
       if(!wantOpen){const btn=taskFor(w);if(btn)btn.classList.remove('active');}
       if(wantOpen&&rec.max)setMaximized(w,true);
       /* геометрия для проверки накладок ниже: plan — как задумано раскладкой
          (доли без зажатия внутрь сцены), rect — как окно реально нарисовалось */
-      if(!w.hidden&&(isViewer(w)||w.id==='winMonitor'||w.id==='winTerm')&&w.dataset.maximized!=='1'){
+      if(!w.hidden&&(isViewer(w)||w.id==='winMonitor'||w.id==='winTerm'||w.id==='winTerm2')&&w.dataset.maximized!=='1'){
         const rw2=w.offsetWidth||0,rh2=w.offsetHeight||0;
         restoredGeo.push({w,isViewer:isViewer(w),
           rect:{x,y,w:rw2,h:rh2},
@@ -3282,17 +3328,19 @@ function resetLayout(){
       /* окна открываем как задумано по умолчанию (с учётом config.js) */
       const offByConfig=(w.id==='winMusic'&&musicCfg().enabled===false)||
                         (w.id==='winMonitor'&&(CONFIG.monitor||{}).enabled===false)||
-                        (w.id==='winTerm'&&termCfg().enabled===false);
+                        (w.id==='winTerm'&&termCfg().enabled===false)||
+                        (w.id==='winTerm2'&&termCfg().enabled===false);
       let wantOpen=!offByConfig;
       if(w.id==='winMusic')wantOpen=wantOpen&&!!musicCfg().startOpen;
       if(w.id==='winTerm')wantOpen=wantOpen&&termCfg().startOpen!==false;
+      if(w.id==='winTerm2')wantOpen=false;   // второй — только вручную или из раскладки
       w.hidden=!wantOpen;
       if(!wantOpen){const btn=taskFor(w);if(btn)btn.classList.remove('active');}
       /* терминал ставится ПОСЛЕ монитора, поэтому его старая геометрия
          (например, после перетаскивания) воспринималась бы монитором как
          занятое место и сдвигала бы его на крайний вариант с наложением.
          Reset — значит «всё на места», чистим координаты перед перекладкой */
-      if(w.id==='winTerm'){w.style.left='';w.style.top='';w.style.width='';w.style.height='';}
+      if(w.id==='winTerm'||w.id==='winTerm2'){w.style.left='';w.style.top='';w.style.width='';w.style.height='';}
     });
     hiddenSvc=new Set();
     renderServices();
@@ -3631,16 +3679,50 @@ function startMonitor(){
    config.js): строка печатается как есть, строка от '$ ' выполняется
    как команда, поэтому ['…текст…', '$ fetch'] — текст и сразу сводка. === */
 const termCfg=()=>CONFIG.term||{};
-const termWin=document.getElementById('winTerm');
-const termOut=document.querySelector('[data-term-out]');
-const termIn=document.querySelector('[data-term-in]');
-const termPromptEl=document.querySelector('[data-term-prompt]');
-let termHistory=[],termHistPos=-1,termStarted=false;
+/* Два терминала работают параллельно: у каждого свой вывод, своя история
+   ввода и своя партия в блэкджек. Сам код (termPrint, TERM_CMDS,
+   blackjack…) об экземплярах не знает — он видит «текущий контекст»:
+   termCtx(t) подставляет в ссылки ниже нужное окно, а termQueue не даёт
+   двум вводам переплестись: строка из одного терминала не может уехать
+   в чужой вывод, пока предыдущая ещё ждёт сеть (fetch, банк блэкджека). */
+let termWin=null,termOut=null,termIn=null,termPromptEl=null;
+let termStarted=false;                 // поле текущего контекста (см. termCtx)
+let termQueue=Promise.resolve();
 
 /* Состояние игры в блэкджек (модуль — ниже, в конце раздела терминала).
-   Объявлено здесь: termRun смотрит на него при каждой строке ввода. */
-const BJ={active:false,state:null,balance:0,deck:[],dealer:[],hands:[],hand:0,
-          bet:0,ins:0,hideHole:true,splitUsed:false,quit:false,roundStart:0};
+   BJ0 — эталон: у каждого терминала свой экземпляр, своя партия; termRun
+   смотрит на BJ при каждой строке ввода — это всегда текущий контекст. */
+const BJ0={active:false,state:null,balance:0,deck:[],dealer:[],hands:[],hand:0,
+           bet:0,ins:0,hideHole:true,splitUsed:false,quit:false,roundStart:0};
+/* Экземпляры строятся из DOM: окно, его узлы и своё состояние.
+   История (history/histPos) живёт только здесь — её трогают обработчики
+   ввода своего окна, поэтому глобальной она не нужна. */
+const TERMS=['winTerm','winTerm2'].map(id=>{
+ const win=document.getElementById(id);
+ if(!win)return null;
+ return {id,win,
+  out:win.querySelector('[data-term-out]'),
+  in:win.querySelector('[data-term-in]'),
+  prompt:win.querySelector('[data-term-prompt]'),
+  history:[],histPos:-1,started:false,
+  bj:Object.assign({},BJ0)};
+}).filter(Boolean);
+let BJ=BJ0;                           // партия текущего контекста
+
+function termByWin(win){return TERMS.find(t=>t.win===win)}
+function termCtx(t){                  // переключить общий код на экземпляр
+ termWin=t.win;termOut=t.out;termIn=t.in;termPromptEl=t.prompt;
+ termStarted=t.started;BJ=t.bj;
+}
+function termJob(t,fn){               // выполнить в очереди этого терминала
+ const run=()=>{termCtx(t);
+  return Promise.resolve().then(fn).then(
+   ()=>{t.started=termStarted},       // вернуть состояние в экземпляр
+   e=>{t.started=termStarted;throw e})};
+ const p=termQueue.then(run,run);
+ termQueue=p.catch(()=>{});           // упавшая команда не роняет очередь
+ return p;
+}
 
 /* Логотип для fetch: колонка считается по самой длинной строке, поэтому
    свой логотип (CONFIG.term.logo) может быть любой ширины. */
@@ -3658,39 +3740,47 @@ function termPromptText(){
  const cfg=termCfg();
  return (cfg.user||'nerevar')+'@'+(CONFIG.serverName||'server')+':~$';
 }
-function termFocus(){if(termIn)termIn.focus({preventScroll:true})}
+/* Фокус — только через экземпляр: вне очереди глобальный termIn может
+   указывать на чужое окно. */
+function termFocus(t){if(t&&t.in)t.in.focus({preventScroll:true})}
 function termEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-function termScroll(){
- if(!termOut)return;
- while(termOut.childElementCount>800)termOut.removeChild(termOut.firstChild); // вывод не растёт бесконечно
- termOut.scrollTop=termOut.scrollHeight;
+/* out — необязательный аргумент: внутри очереди (termJob) печатаем в
+   текущий контекст, из синхронных обработчиков — прямо в своё окно. */
+function termScroll(out){
+ out=out||termOut;
+ if(!out)return;
+ while(out.childElementCount>800)out.removeChild(out.firstChild); // вывод не растёт бесконечно
+ out.scrollTop=out.scrollHeight;
 }
-function termPrint(text,cls){
- if(!termOut)return;
+function termPrint(text,cls,out){
+ out=out||termOut;
+ if(!out)return;
  String(text==null?'':text).split('\n').forEach(line=>{
   const div=document.createElement('div');
   div.className='term-line'+(cls?' '+cls:'');
   /* Пустая строка обязана занимать строку высоты: div без содержимого
      схлопнулся бы в ноль и разделители разделов (man, fetch) пропали. */
   div.textContent=line===''?'\u00A0':line;
-  termOut.appendChild(div);
+  out.appendChild(div);
  });
- termScroll();
+ termScroll(out);
 }
 /* Готовый HTML — так выводится fetch (подписи полей цветом, как в fastfetch).
    Значения перед этим проходят termEsc: HTML собирает только сама панель. */
-function termPrintHtml(html,cls,style){
- if(!termOut)return;
+function termPrintHtml(html,cls,style,out){
+ out=out||termOut;
+ if(!out)return;
  const div=document.createElement('div');
  div.className='term-line'+(cls?' '+cls:'');
  if(style)div.style.cssText=style;
  div.innerHTML=html===''?'\u00A0':html;
- termOut.appendChild(div);
- termScroll();
+ out.appendChild(div);
+ termScroll(out);
 }
-function termClear(){if(termOut)termOut.innerHTML=''}
-function termEcho(line){ // строка «приглашение + команда», как в настоящей консоли
- termPrintHtml('<span class="term-ok">'+termEsc(termPromptText())+'</span> '+termEsc(line));
+function termClear(out){out=out||termOut;if(out)out.innerHTML=''}
+function termEcho(line,out){ // строка «приглашение + команда», как в настоящей консоли
+ termPrintHtml('<span class="term-ok">'+termEsc(termPromptText())+'</span> '+termEsc(line),
+               undefined,undefined,out);
 }
 async function termStats(){
  const url=(CONFIG.monitor||{}).endpoint||'/api/stats';
@@ -3886,7 +3976,7 @@ const TERM_CMDS={
    'blackjack                — play blackjack against the dealer',
    'theme dark|light         — switch the panel theme',
    'open <window>            — open a window: server, viewer, monitor,',
-   '                          music, help, term',
+   '                          music, help, term, term2 (2nd terminal)',
    'about                    — what this panel is',
    'exit                     — close this window',
    'sudo <command>           — nice try'].forEach(l=>termPrint('  '+l));
@@ -4096,9 +4186,9 @@ const TERM_CMDS={
   if(key==='help'){runAction('help');termPrint('Opened: Help','term-ok');return}
   const map={server:'winServers',servers:'winServers',viewer:'winArt',viewers:'winArt',
              picture:'winArt',monitor:'winMonitor',music:'winMusic',audio:'winMusic',
-             term:'winTerm',terminal:'winTerm'};
+             term:'winTerm',terminal:'winTerm',term2:'winTerm2',terminal2:'winTerm2'};
   const id=map[key];
-  if(!id){termPrint('usage: open <server|viewer|monitor|music|help|term>','term-err');return}
+  if(!id){termPrint('usage: open <server|viewer|monitor|music|help|term|term2>','term-err');return}
   const win=document.getElementById(id);
   const btn=taskFor(win);
   if(!win||(btn&&btn.hidden)){termPrint('That window is switched off in config.js','term-err');return}
@@ -4140,52 +4230,72 @@ async function termStart(){
   }else termPrint(s);
  }
 }
-function termShow(){termStart();termFocus()}
+/* Открыли окно терминала: фокус — сразу, стартовый вывод — в очереди
+   экземпляра (печатает в свой экран, соседний не трогает). */
+function termShow(t){
+ termFocus(t);
+ return termJob(t,()=>termStart());
+}
 
-/* --- ввод: Enter выполняет, ↑/↓ — история, Tab дописывает, Ctrl+L чистит - */
+/* --- ввод: Enter выполняет, ↑/↓ — история, Tab дописывает, Ctrl+L чистит -
+   Обработчики вешаются на КАЖДЫЙ терминал и работают только с его
+   экземпляром (t): синхронные реакции (значение ввода, фокус, чистка)
+   очереди не ждут, а всё, что печатает или играет, идёт через termJob. */
 (function initTerm(){
- if(!termIn)return;
- termIn.addEventListener('keydown',event=>{
-  if(event.key==='Enter'){
-   event.preventDefault();
-   const raw=termIn.value;
-   termIn.value='';
-   if(!raw.trim())return;
-   termHistPos=-1;
-   termHistory.push(raw);
-   if(termHistory.length>200)termHistory.shift();
-   termEcho(raw.trim());
-   termRun(raw);
-   return;
-  }
-  if(event.key==='ArrowUp'||event.key==='ArrowDown'){
-   event.preventDefault();
-   if(!termHistory.length)return;
-   if(termHistPos<0)termHistPos=termHistory.length;   // первый ↑ — последняя команда
-   termHistPos+=(event.key==='ArrowUp'?-1:1);
-   if(termHistPos<0)termHistPos=0;
-   if(termHistPos>=termHistory.length){termHistPos=-1;termIn.value=''}
-   else termIn.value=termHistory[termHistPos];
-   const end=termIn.value.length;
-   termIn.setSelectionRange(end,end);
-   return;
-  }
-  if(event.key==='Tab'){
-   event.preventDefault();
-   if(BJ.active)return;                        // во время партии Tab молчит
-   if(!termIn.value||/\s/.test(termIn.value))return;   // дописываем только первое слово
-   const head=termIn.value.toLowerCase();
-   const names=Object.keys(TERM_CMDS).filter(n=>n.indexOf(head)===0);
-   if(names.length===1)termIn.value=names[0]+' ';
-   else if(names.length>1){termEcho(termIn.value);termPrint(names.join('   '),'term-hint')}
-   return;
-  }
-  if(event.key==='l'&&(event.ctrlKey||event.metaKey)){event.preventDefault();termClear()}
- });
- /* клик по выводу возвращает курсор во ввод (не мешая выделению текста) */
- if(termOut)termOut.addEventListener('click',()=>{
-  const sel=window.getSelection?String(window.getSelection()):'';
-  if(!sel)termFocus();
+ TERMS.forEach(t=>{
+  /* «+» в конце строки ввода: прыгнуть на второй терминал (и обратно) */
+  const jump=t.win.querySelector('[data-term-new]');
+  if(jump)jump.addEventListener('click',()=>{
+   const other=TERMS.find(x=>x!==t);
+   if(other)showWindow(other.win,true);
+  });
+  t.in.addEventListener('keydown',event=>{
+   if(event.key==='Enter'){
+    event.preventDefault();
+    const raw=t.in.value;
+    t.in.value='';
+    if(!raw.trim())return;
+    /* История, эхо и сама команда — в очереди своего окна: пока
+       предыдущая строка ждёт сеть, чужой ввод сюда попасть не может. */
+    termJob(t,async()=>{
+     t.histPos=-1;
+     t.history.push(raw);
+     if(t.history.length>200)t.history.shift();
+     termEcho(raw.trim());
+     await termRun(raw);
+    });
+    return;
+   }
+   if(event.key==='ArrowUp'||event.key==='ArrowDown'){
+    event.preventDefault();
+    if(!t.history.length)return;
+    if(t.histPos<0)t.histPos=t.history.length;   // первый ↑ — последняя команда
+    t.histPos+=(event.key==='ArrowUp'?-1:1);
+    if(t.histPos<0)t.histPos=0;
+    if(t.histPos>=t.history.length){t.histPos=-1;t.in.value=''}
+    else t.in.value=t.history[t.histPos];
+    const end=t.in.value.length;
+    t.in.setSelectionRange(end,end);
+    return;
+   }
+   if(event.key==='Tab'){
+    event.preventDefault();
+    if(t.bj.active)return;                        // во время партии Tab молчит
+    if(!t.in.value||/\s/.test(t.in.value))return;   // дописываем только первое слово
+    const head=t.in.value.toLowerCase();
+    const names=Object.keys(TERM_CMDS).filter(n=>n.indexOf(head)===0);
+    if(names.length===1)t.in.value=names[0]+' ';
+    /* подсказка — сразу и только в своё окно (t.out, минуя очередь) */
+    else if(names.length>1){termEcho(t.in.value,t.out);termPrint(names.join('   '),'term-hint',t.out)}
+    return;
+   }
+   if(event.key==='l'&&(event.ctrlKey||event.metaKey)){event.preventDefault();termClear(t.out)}
+  });
+  /* клик по выводу возвращает курсор во ввод (не мешая выделению текста) */
+  t.out.addEventListener('click',()=>{
+   const sel=window.getSelection?String(window.getSelection()):'';
+   if(!sel)termFocus(t);
+  });
  });
 })();
 
@@ -4563,9 +4673,11 @@ function bjSettle(){
    углу, там, где оно и должно стоять; если такого нет — самое вместительное.
    Препятствия — окно Server, просмотрщики, System Monitor и перетащенный
    руками аудиоплеер. Ручное положение самого терминала не трогаем. */
-function placeTerm(){
- const win=document.getElementById('winTerm');
- if(!win||win.hidden||win.dataset.maximized==='1')return;
+/* Ставит терминал(ы) в свободное место. Без аргумента — все открытые
+   экземпляры по очереди: второй объезжает первый (см. taken ниже). */
+function placeTerm(win){
+ if(!win){TERMS.forEach(t=>placeTerm(t.win));return}
+ if(win.hidden||win.dataset.maximized==='1')return;
  if(win.dataset.manual==='1'){clampWindow(win);return}
  const cfg=termCfg();
  const sw=scene.clientWidth,sh=scene.clientHeight,m=10,PAD=6;
@@ -4582,6 +4694,9 @@ function placeTerm(){
     из раскладки: сам он встаёт по центру, объезжать его бессмысленно */
  const music=document.getElementById('winMusic');
  if(music&&!music.hidden&&music.dataset.manual==='1')taken.push(rectInScene(music));
+ /* второй терминал — препятствие для первого (и наоборот): два экземпляра
+    не должны вставать друг на друга */
+ TERMS.forEach(t=>{if(t.win!==win&&!t.win.hidden)taken.push(rectInScene(t.win))});
  const hits=(x,y,w,h)=>taken.some(r=>x<r.x+r.w+PAD&&r.x<x+w+PAD&&y<r.y+r.h+PAD&&r.y<y+h+PAD);
  /* Насколько можно развернуться из точки (x,y), не трогая чужие окна:
     вправо — до сцены или ближайшего препятствия, вниз — так же. */
@@ -4675,12 +4790,13 @@ function placeTerm(){
   }
   layoutReady=true;                 // дальше изменения можно сохранять
   syncLayoutPalette();
-  /* Терминал: стартовый вывод (CONFIG.term.startup) печатается ровно один
-     раз при загрузке — даже если окно закрыто, содержимое подождёт в нём.
-     Фокус во вводе — только если терминал и так активен (раскладка могла
-     открыть его верхним окном). */
-  await termStart();
-  if(termWin&&!termWin.hidden&&termWin.classList.contains('active'))termFocus();
+  /* Терминалы: стартовый вывод (CONFIG.term.startup) печатается ровно один
+     раз на каждый экземпляр — даже если окно закрыто, содержимое подождёт
+     в нём. Фокус во вводе — только в активном окне (раскладка могла
+     открыть терминал верхним окном). */
+  for(const t of TERMS){await termJob(t,()=>termStart())}
+  const actTerm=TERMS.find(t=>!t.win.hidden&&t.win.classList.contains('active'));
+  if(actTerm)termFocus(actTerm);
 })();
 </script>
 </body>
