@@ -1,0 +1,1371 @@
+<!--
+  ==========================================================================
+  SERVER HUB — Win9x-панель для домашнего сервера
+  ==========================================================================
+
+  СОСТАВ ПАПКИ
+  ------------
+    index.html            — эта панель: разметка и стили (блок <style>)
+    app.js                — логика панели: окна, меню, System Monitor,
+                            Audio Player, Picture Viewer, Help, терминал
+                            (команды, fetch, блэкджек, viz), Network,
+                            Download Manager, раскладка окон
+    config.js             — ВСЕ настройки: имя сервера, адреса, сервисы,
+                            System Monitor, сеть, загрузчик, аудио-плеер,
+                            скины, терминал, Help, темы оформления
+    openstep.html         — старый адрес скина WindowMaker: перенаправляет
+                            на index.html?skin=wm (сам скин живёт в этом
+                            файле, переключатель — View → WindowMaker skin)
+    server.py             — локальный сервер: раздаёт панель, метрики,
+                            картинки, музыку, скины, список шрифтов,
+                            сеть (трафик/порты) и загрузку файлов
+    nerevar-hub.service   — unit для systemd (автозапуск)
+
+  БЫСТРЫЙ СТАРТ НА СЕРВЕРЕ
+  ------------------------
+    1. Скопируй папку в /opt/nerevar-hub (или в любое другое место)
+    2. python3 server.py --port 80        # проверка вручную
+    3. Для автозапуска см. файл nerevar-hub.service
+    4. Открой http://<ip-сервера>/
+
+  ЗАЧЕМ НУЖЕН server.py, А НЕ ОДИН ТОЛЬКО HTML
+  --------------------------------------------
+    Браузер не умеет читать процессор/память/диск — данные отдаёт
+    server.py, а панель забирает их по адресу из CONFIG.monitor
+    (по умолчанию '/api/stats' — тот же порт, CORS не нужен).
+    Можно открыть index.html и прямо с диска — тогда запусти сервер
+    с флагом --cors либо укажи в CONFIG.monitor полный адрес.
+
+  ЧТО МЕНЯТЬ ПОД СВОЙ СЕРВЕР
+  --------------------------
+    Всё — в отдельном файле config.js рядом с index.html (ищи
+    `window.CONFIG={`): имя сервера, адреса, сервисы, System Monitor
+    (там же — какие точки монтирования скрывать в разделе Storage),
+    аудио-плеер (откуда брать треки, громкость, скины Qmmp/Winamp 2)
+    и текст Help. Полный список полей — в шапке config.js.
+    Поведение панели живёт в app.js, внешний вид — в блоке <style>
+    этого файла; config.js, app.js и стили сервер отдаёт без кэша,
+    поэтому любые правки видны сразу после F5.
+
+  ТЕМА ОФОРМЛЕНИЯ — ТЁМНАЯ И СВЕТЛАЯ
+  ----------------------------------
+    CONFIG.theme в config.js: 'dark' (по умолчанию) или 'light'.
+    'dark' — тёмная тема в духе Dark Reader: бирюзовый рабочий стол,
+    почти чёрные тела окон, тёмно-синие заголовки, светло-голубые
+    подписи, белый текст, синие и оранжевые шкалы.
+    Та же тема переключается кнопкой «Dark theme» во вкладке View:
+    выбор запоминается в браузере и едет в раскладку на сервере
+    (layout.json), поэтому он одинаков на всех устройствах.
+    «View → Reset window layout» забывает выбор и возвращает тему,
+    заданную в config.js.
+    Отдельно — скин WindowMaker (View → WindowMaker skin, или ссылка
+    index.html?skin=wm): свой «ремонт» окон, док справа и своя палитра
+    поверх обеих тем; выбор хранится в браузере (nerevar-hub.skin),
+    цветовая схема скина — плитки над часами в доке. Подробности —
+    README, раздел «Альтернативный скин».
+    Стартовая цветовая схема скина — CONFIG.wmtheme в config.js:
+    'default' (NeXT-серый) | 'steel' | 'dark'. Параметр ?wm=… и
+    сохранённый выбор (плитки над часами в доке) важнее этого поля.
+
+  ШРИФТ ИНТЕРФЕЙСА — ИЗ КОНФИГА И ИЗ СИСТЕМЫ
+  -------------------------------------------
+    CONFIG.font в config.js — строка font-family, как в CSS:
+        'Tahoma, Verdana, sans-serif' — шрифт по умолчанию
+        'DejaVu Sans'                 — шрифт, стоящий в системе
+        ''                            — пусто, тоже по умолчанию
+    Панель сама поднимает список установленных в системе шрифтов:
+    server.py отдаёт GET /api/fonts (в Linux их считает fontconfig —
+    «fc-list»; утилиты нет — server.py обходит шрифтовые папки сам
+    и читает имена из файлов TTF/OTF). «View → Font…» показывает этот
+    список: каждое имя — своим начертанием, строка поиска фильтрует,
+    Enter применяет имя, которого в списке нет.
+    Выбор в диалоге важнее CONFIG.font, хранится как тема (браузер +
+    layout.json), а «View → Reset window layout» возвращает шрифт,
+    заданный в config.js. Арт-окно и плеер — моноширинные, их поле
+    font не трогает.
+
+  CONFIG.monitor — МЕТРИКИ СЕРВЕРА
+  -------------------------------
+      enabled     : true          — false прячет окно System Monitor
+      windowTitle : 'System Monitor'
+      icon        : 'M'
+      endpoint    : '/api/stats'  — откуда брать метрики
+                    (можно 'http://192.168.x.x/api/stats')
+      interval    : 2000          — период опроса, мс
+      timeout     : 2500          — таймаут запроса, мс
+      width/height: 360 / 225     — желаемый размер окна, оно само
+                                    подыщет себе свободное место
+      exclude      : ['/boot']    — какие точки монтирования не показывать
+                                    в разделе Storage; '/boot' прячет и
+                                    '/boot/efi'. Корень '/' — всегда.
+
+    Если сервер недоступен — окно показывает «N/A — host unreachable»,
+    в консоли при этом нет ошибок JS.
+
+  ЧТО ПОКАЗЫВАЕТ ОКНО SYSTEM MONITOR
+  ----------------------------------
+      CPU / RAM / Load — обычные полоски из /api/stats.
+
+      STORAGE          — по строке на каждый смонтированный диск:
+                         точка монтирования, устройство, занятость,
+                         подпись «92.8 GB free of 457 GB · ext4».
+                         >= 75% — оранжевая полоска,
+                         >= 90% — красная полоска и красный процент.
+
+      RAID             — по строке на каждый массив из /proc/mdstat:
+                         уровень (raid1 …), размер, состояние
+                         (clean [UU] / recovery 42% / DEGRADED /
+                         inactive) и физические диски внутри:
+                           ● рабочий, ○ запасной, × вышел из строя.
+                         Полоска — идущее восстановление, либо доля
+                         рабочих дисков массива.
+
+    Оба раздела показываются только когда данные есть: mdraid не
+    используется — блок RAID просто не отображается. Если томов много
+    и окно не влезает по высоте, внутри появляется полоса прокрутки.
+
+  АУДИО-ПЛЕЕР И СКИНЫ (CONFIG.music)
+  ---------------------------------
+      base     : 'music/'    — URL-префикс папки с треками. Папку music/
+                               отдаёт server.py; свой диск подключается
+                               флагом --music-dir /mnt/hdd/music,
+                               внешний адрес — просто полный URL.
+      list     : 'api/music' — endpoint со списком треков ('' — не
+                               спрашивать сервер, см. поле tracks)
+      tracks   : []          — ручной список: ['a.mp3','b.ogg']
+      volume   : 0.8         — громкость 0..1
+      loop     : 'all'       — 'off' | 'all' | 'one' (кнопка R)
+      shuffle  : false       — перемешивание (кнопка S)
+      startOpen: false       — открывать окно сразу при загрузке
+
+      Скины — настоящий вид Winamp 2 / Qmmp. Формат .wsz (это ZIP с
+      BMP-файлами: main.bmp, cbuttons.bmp, titlebar.bmp, numbers.bmp,
+      pledit.bmp, pledit.txt …):
+
+        * положи .wsz в папку skins/ — он появится в списке скинов;
+        * либо нажми «Skin…» и выбери .wsz у себя на диске (файл
+          никуда не отправляется — ZIP и BMP разбирает сам браузер);
+        * можно просто перетащить .wsz на окно плеера.
+
+      Настройки скинов (CONFIG.music.skins):
+        enabled        : true      — false прячет панель выбора скина
+        dir            : 'skins/'  — префикс папки со скинами (/skins/)
+        list           : 'api/skins' — endpoint со списком скинов
+        start          : ''        — скин при загрузке страницы
+        scale          : 2         — во сколько раз увеличено окно Winamp
+        playlistHeight : 196       — высота плейлиста в пикселях скина
+
+      Включённый скин кликабелен: кнопки транспорта, ползунки громкости
+      и перемотки, кнопки EQ/плейлиста, строки плейлиста (клик — играть,
+      колесо — прокрутка), заголовок — перетаскивание окна. Цвета
+      плейлиста берутся из pledit.txt скина. Нужен браузер с
+      поддержкой DecompressionStream (все современные).
+
+  СЕРВЕР (server.py)
+  ------------------
+    python3 server.py --port 80           # порт по умолчанию 80
+    python3 server.py --port 80 --cors    # если HTML открывается с диска
+
+    GET /             -> index.html
+    GET /api/stats    -> {"cpu":..,"load1":..,"cores":..,"mem_used":..,
+                          "mem_total_gb":..,"disk_used":..,"uptime":..}
+    GET /api/pics     -> {"images":[...],"art":[...]} — файлы из pics/
+    GET /pics/<имя>   -> картинка или ascii-арт из pics/
+    GET /api/music    -> {"tracks":[...]} — список треков из music/
+    GET /music/<имя>  -> аудиофайл (mp3/ogg/flac/…, Range поддерживается)
+    GET /api/skins    -> {"skins":[...]} — скины .wsz/.zip из skins/
+    GET /skins/<имя>  -> файл скина (zip-архив)
+    GET /api/network    -> счётчики трафика и слушающие порты (/proc)
+    GET /api/downloads  -> список загрузок Download Manager
+    POST /api/downloads -> начать загрузку {"url": "http://…"}
+    GET /downloads/<имя> -> скачанный файл (всегда как вложение)
+    GET /favicon.ico  -> 204
+
+    Зависимостей нет — только стандартная библиотека Python 3.
+    Метрики берутся из /proc и os.statvfs.
+
+  СЕТЬ (CONFIG.network)
+  ---------------------
+    Окно Network (File → Network): живой график трафика за последнюю
+    минуту (зелёная линия — приём, голубая — отправка), текущие
+    скорости ↓/↑ и суммарные байты с загрузки — всё из одного
+    GET /api/network: сервер читает /proc/net/dev (счётчики) и
+    /proc/net/tcp{,6} (LISTEN-сокеты). Таблица Listening ports под
+    графиком — открытые порты: протокол, адрес, порт.
+    Интерфейсы из CONFIG.network.ignore (по умолчанию ["lo"]) в график
+    не попадают: свой трафик панели ходит по loopback и засорял бы его;
+    [] — показывать все. График помнит CONFIG.history секунд (60),
+    опрос — раз в CONFIG.interval мс, пока окно открыто.
+    Команда ss в Terminal печатает те же порты, карточка Network в
+    Available services — живые скорости ↓/↑.
+
+  ЗАГРУЖЧИК (CONFIG.downloads)
+  ---------------------------
+    Окно Download Manager (File → Download Manager): поле URL + Start,
+    ниже — список загрузок с Win9x-прогресс-баром, процентом,
+    скоростью, ETA и статусом; крестик отменяет рабочую загрузку
+    и убирает завершённую строку. Опрос GET /api/downloads идёт,
+    пока окно открыто или есть незавершённые загрузки.
+    На сервере: POST /api/downloads ставит URL в фоновый поток
+    (urllib, только http/https), файлы пишутся в папку downloads/
+    (создаётся сама, в git не идёт), готовый файл появляется
+    атомарно. Лимит — CONFIG.downloads.maxMB (0 — без лимита):
+    панель, дождавшись Content-Length, сама останавливает слишком
+    большое скачивание. Готовые файлы отдаются по /downloads/<имя>
+    всегда с Content-Disposition: attachment — скачанная HTML-страница
+    сохранится, а не выполнится рядом с панелью.
+    В терминале то же самое: wget <url> — запускает загрузку и печатает
+    имя файла и итог; ss — слушающие порты. Карточка Download Manager
+    в Available services показывает число активных загрузок.
+
+  ОКНА
+  ----
+    Перетаскивание — за заголовок, изменение размера — за уголок справа
+    снизу. Серверное окно всегда сверху слева, окно арта — снизу справа,
+    System Monitor само подстраивается под свободную зону.
+    Положения запоминаются на время сессии.
+
+  ЧАСЫ
+    На часах в таскбаре две строки: сверху ВРЕМЯ, под ним ДАТА
+    «Mo/Nov/2/2026» — «День недели в 2 символа / Мес / Д / Г», всегда
+    по-английски. Обе строки видны на любой ширине: рамка часов
+    подчиняется дате, поэтому на узких экранах ничего прятать не нужно
+    (раньше время до 700px скрывалось — теперь не скрывается).
+    Подписи сервисов до 420px ужимаются в иконки — таскбар влезает
+    вплоть до 380px.
+
+  КАЛЕНДАРЬ
+    Клик по часам в таскбаре открывает календарь: переключение месяцев
+    стрелками, сегодняшний день обведён пунктиром, выбранный — залит
+    синим, кнопка «Today» возвращает к текущему месяцу. Клик по дате
+    другого месяца переключает на этот месяц.
+    Закрывается повторным кликом по часам, кликом в любую другую точку
+    экрана или Esc. Текст календаря — английский, как весь интерфейс.
+
+  ASCII-АРТ
+  ---------
+    Внутри #winArt арта больше нет: имя файла лежит в config.js
+    (CONFIG.artFile), а сам арт читается с сервера из папки pics/
+    (по умолчанию pics/ASCII_ART.TXT).
+    Свой арт: положи .txt в pics/ и пропиши его имя в CONFIG.artFile —
+    index.html трогать не нужно. Файла нет или путь битый — в заголовке
+    окна «Cannot open: …», остальная панель работает как обычно.
+    Подгонка под размер окна и масштабирование без искажений
+    (View → Zoom) работают как раньше.
+
+  КАРТИНКИ И GIF
+  --------------
+    Окно Picture Viewer умеет показывать и обычные картинки, и анимированные
+    GIF (анимацию проигрывает браузер, ничего настраивать не нужно).
+    Открыть: File → Open image… — вписать адрес (URL) или нажать Browse… и
+    выбрать файл. Ещё проще — просто перетащить файл на окно: пока файл
+    висит над окном, вокруг него пунктирная рамка.
+    Поддерживаются PNG, JPG, WEBP, SVG, GIF и всё, что понимает браузер.
+    Картинка вписывается в окно целиком (contain), пропорции не искажаются,
+    окно само подстраивается под пропорции картинки, View → Zoom действует
+    и на неё. В заголовке окна — имя файла.
+    Неудачный адрес не ломает текущую картинку: в заголовке появится
+    «Cannot open: …», а диалог останется открытым — можно исправить адрес.
+    Бросили не-картинку — в заголовке «Not an image: …», содержимое не меняется.
+    File → Back to ASCII art возвращает исходный ASCII-арт.
+    Картинка берётся откуда угодно: файл с вашего диска (Browse… или
+    перетаскивание на окно), картинка с самого сервера из папки pics/
+    (адрес вида /pics/cat.gif) либо любой другой URL.
+    Из pics/ отдаются только файлы из списка (картинки и .txt-арт) и
+    только внутри самой папки: выход за её пределы (../, абсолютный
+    путь, симлинк) даёт 404.
+
+    Что показывать при загрузке — задаётся в CONFIG.picFile:
+      'cat.png'  — конкретная картинка из pics/
+      '~.png'    — каждый раз СЛУЧАЙНАЯ .png из pics/
+      '~.gif'    — случайная анимированная
+      '~'        — любая картинка из pics/
+      ''         — ничего: окно остаётся на ascii-арте
+    Для случайного выбора панель спрашивает список файлов по адресу
+    /api/pics (его отдаёт server.py) и берёт оттуда имя подходящего
+    расширения. Список обновляется при каждой загрузке страницы —
+    добавил картинку в pics/, перезагрузил вкладку, и она уже может
+    выпасть.
+
+    Папка pics/ — единственное место, где лежит содержимое Picture
+    Viewer: и картинки, и ascii-арт. В config.js — только имена.
+
+  НЕСКОЛЬКО ОКОН PICTURE VIEWER
+  -----------------------------
+    Сколько окон Picture Viewer открывать — решает CONFIG.viewers
+    (1..6, по умолчанию 2). В разметке окно одно (#winArt) — оно же
+    шаблон: остальные копируются при загрузке страницы, поэтому в
+    таскбаре, в конструкторе раскладки и в /api/layout новые окна
+    появляются сами, index.html для этого править не нужно.
+    Окна не зависят друг от друга: своё фото (File → Open image… или
+    перетаскивание файла прямо на окно), свой зум (View → Zoom), свой
+    режим «арт/картинка» и своё имя в заголовке — Picture Viewer,
+    Picture Viewer 2, …
+    Диалог открытия один на все окна, но адресат у него один —
+    последнее активное окно; подпись «Opens in …» прямо в диалоге
+    говорит, куда картинка попадёт.
+    Содержимое общее: CONFIG.artFile и CONFIG.picFile читаются всеми
+    окнами, а при '~' каждое окно при загрузке тянет своё число
+    случайности и выбирает СВОЮ случайную картинку.
+    Окна делят свободную колонку на доли: в широком окне встают в ряд
+    по низу, на узком экране — друг под другом. Закрытое окно места не
+    занимает, а ручное перетаскивание действует только на своё окно.
+    Авто-окна при этом объезжают перетащенные руками: если их доля
+    попадает на чужое ручное окно или на окно Server, они уезжают на
+    ближайшее свободное место. Если свободного места нет вовсе — на
+    узком экране, где окно Server занимает всю высоту, — просмотрщики
+    перераскладываются заново и ужимаются под экран, только бы не
+    налезать друг на друга. Намеренную «стопку» окон, заданную в
+    раскладке, такое вмешательство не трогает.
+
+  ТЕРМИНАЛ (CONFIG.term)
+  ----------------------
+    Окно-пародия на консоль (File → Terminal): чёрный экран, моноширинный
+    шрифт, приглашение «user@server:~$». Ввод прямо в окне: Enter выполняет,
+    ↑/↓ вспоминают историю, Tab дописывает имя команды.
+    Сколько таких окон — CONFIG.term.count (1..6, по умолчанию 2): все
+    создаются при загрузке и открываются сразу. Кнопка «+» в конце строки
+    ввода прыгает на следующее окно по кругу, кнопка в таскбаре или
+    команда «open term2» / «open term3»… открывает нужное. Окна работают
+    параллельно: у каждого экземпляра своя история ввода, свой стартовый
+    вывод и своя
+    партия блэкджека (банк общий — файл balance.json на сервере), а
+    очередь ввода (termJob/termCtx ниже) не даёт строке одного окна уехать
+    в вывод другого, пока предыдущая ещё ждёт сеть.
+    Команды:
+        help                — список команд
+        fetch / neofetch    — сводка о системе в духе fastfetch
+        clear / cls         — очистить экран
+        date                — текущая дата и время
+        echo <текст>        — напечатать текст
+        whoami              — кто вы (user из config.js)
+        uname [-a|-r|-s|-m] — система, ядро, машина (с сервера)
+        uptime              — как давно сервер работает
+        ls                  — содержимое папок pics/ music/ skins/
+        cowsay <текст>      — корова повторит вашу фразу
+        fortune             — случайная поговорка
+        cal [месяц] [год]   — сетка месяца, сегодня зелёным
+        df                  — таблица места на дисках
+        free                — память сервера: total/used/free
+        ps                  — окна панели как «процессы» (PID/STAT/CMD)
+        man <команда>       — страница справки (или «No manual entry»)
+        viz                 — столбцы спектра играющего трека
+        ss                  — слушающие порты сервера (как в Network)
+        wget <url>          — скачать файл в downloads/ (http/https)
+        theme dark|light    — переключить тему панели
+        open <окно>         — открыть окно: server, viewer, monitor,
+                              music, help, network, downloads,
+                              term, term2… (сколько их — CONFIG.term.count)
+        about               — имя и версия панели
+        exit                — закрыть окно терминала
+        sudo <команда>      — шутка
+    Список поговорок для fortune — CONFIG.term.fortunes в config.js:
+    массив строк, по одной на строку; правится там, index.html не
+    трогаем, а пустой список команда отметит подсказкой.
+    Блэкджек (blackjack): игра против дилера по правилам казино —
+    3:2, дилер стоит на мягком 17, сплит до четырёх рук, удвоение,
+    страховка и сдача. Банк хранится на сервере (/api/balance ->
+    balance.json), стартовая сумма и минимум ставки —
+    CONFIG.term.blackjack. Пока идёт партия, ввод в консоли — это
+    ходы: h/s/d/p/u, число — ставка, q — выход, clear, help, reset;
+    остальные команды оболочки работают как обычно.
+    Визуализатор (viz): рамка-виджет со спектром того, что играет в
+    Audio Player, прямо в консоли — столбцы █ цветными полосами
+    (зелёный низ, жёлтый середина, красный верх), ▀ — недавний пик
+    столбца; повторный viz останавливает, а закрытие или clear окна
+    останавливает само. Размеры, частота кадров и бпф — CONFIG.term.viz.
+    fetch берёт данные оттуда же, откуда System Monitor, — GET /api/stats
+    (там же host, os и kernel, их добавляет server.py), плюс то, что знает
+    сам браузер: тема, шрифт, размер экрана, число окон и сервисов. Если
+    сервер недоступен — консоль честно напишет «host unreachable».
+    Что печатать при запуске — CONFIG.term.startup: строка печатается как
+    есть, строка, начинающаяся с '$ ', выполняется как команда, поэтому
+    ['…приветствие…', '$ fetch'] — приветствие и сразу сводка о системе.
+    Там же: enabled / count (сколько окон на экране) / windowTitle /
+    icon / startOpen / размер окна /
+    user (имя в приглашении) и logo — свой логотип для fetch.
+
+  ==========================================================================
+-->
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server Hub</title>
+<style>
+/* Цвета панели — все через переменные: светлая тема ниже (значения как были),
+   тёмная — блок html[data-theme=dark] в конце этого же style. */
+/* --ui-font: шрифт интерфейса; меняют CONFIG.font и View → Font…
+      (арт и окно плеера моноширинные — их настройка не трогает) */
+:root{--ui-font:Tahoma,Verdana,sans-serif;--desktop:#008080;--gray:#c0c0c0;--light:#fff;--mid:#dfdfdf;--dark:#808080;--black:#222;--blue:#000080;--navy:#000060;
+ --edge:#fff;--blue-2:#1084d0;
+ --text:#111;--text-2:#333;--text-3:#222;--text-strong:#000;
+ --dim:#444;--dim-2:#555;--dim-3:#666;--dim-4:#777;--dim-5:#888;--muted:#a0a0a0;--dot:#000;
+ --heading:#000080;--error:#a00;--crit:#a00000;--ok:#006400;--spare:#806000;--fail-fg:#800000;--fail-bg:#e8c0c0;
+ --line:#ccc;--line-2:#999;
+ --surface:#fff;--surface-2:#eee;--card:#d4d0c8;
+ --active:#dedede;--active-2:#efefef;--hover:#e8e8e8;--hover-2:#dcdcdc;
+ --warn:#b06000}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;font-family:var(--ui-font);font-size:13px;color:var(--text);background:var(--desktop);overflow:hidden}
+.scene{position:absolute;top:0;left:0;right:0;bottom:36px;overflow:hidden}
+.window{background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005}
+.appwindow{position:absolute;display:flex;flex-direction:column;min-width:260px;min-height:160px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005;overflow:visible}
+.appwindow>.titlebar{cursor:move;flex:0 0 auto;touch-action:none;-webkit-user-select:none;user-select:none}
+.appwindow>.titlebar .window-controls{touch-action:none}
+.winbody{flex:1 1 auto;min-height:0;overflow:auto;border:2px inset var(--edge);background:var(--gray);padding:14px}
+.art-body{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;overflow:hidden;padding:10px}
+.resize-grip{position:absolute;right:1px;bottom:1px;width:16px;height:16px;cursor:nwse-resize;touch-action:none;z-index:10;background-image:linear-gradient(135deg,transparent 0 40%,var(--dark) 40% 48%,transparent 48% 58%,var(--dark) 58% 66%,transparent 66% 76%,var(--dark) 76% 84%,transparent 84%);user-select:none}
+.taskbar{position:absolute;left:0;right:0;bottom:0;height:36px;display:flex;align-items:center;gap:6px;padding:4px 6px;background:var(--gray);border-top:2px solid var(--light);z-index:500}
+.task{display:flex;align-items:center;gap:7px;min-width:150px;max-width:210px;text-align:left;background:var(--gray);border:2px outset var(--edge);padding:5px 9px;font:12px var(--ui-font);color:var(--text);cursor:default;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.task.active{border-style:inset;background:var(--active);font-weight:bold}
+.task .ticon{width:16px;height:16px;background:var(--gray);border:1px solid var(--dark);display:grid;place-items:center;font:bold 10px var(--ui-font);color:var(--heading);flex:0 0 auto}
+.taskbar .spacer{flex:1}
+.taskbar .clock{border:2px inset var(--edge);padding:1px 9px;font:11px var(--ui-font);color:var(--dim);text-align:center;cursor:default;-webkit-user-select:none;user-select:none;display:flex;flex-direction:column;gap:0;align-items:center;justify-content:center;white-space:nowrap;line-height:1.12}
+/* время — сверху, крупнее и темнее; дата — под ним, чуть мельче */
+.taskbar .clock .ctime{color:var(--text);font-size:11px}
+.taskbar .clock .cdate{color:var(--dim);font-size:10px}
+.taskbar .clock.on{border-style:inset;background:var(--active)}
+/* --- календарь, открывается кликом по часам --------------------------- */
+.calpop{position:absolute;right:8px;bottom:42px;width:216px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005;z-index:600}
+.calpop[hidden]{display:none}
+.cal-head{display:flex;align-items:center;gap:3px;background:linear-gradient(90deg,var(--blue),var(--blue-2));color:#fff;padding:3px 4px}
+.cal-title{flex:1;text-align:center;font:bold 11px var(--ui-font);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cal-nav{width:21px;height:19px;background:var(--gray);border:2px outset var(--edge);font:9px var(--ui-font);color:var(--text);display:grid;place-items:center;padding:0;cursor:default}
+.cal-nav:active{border-style:inset}
+.cal-grid{width:100%;table-layout:fixed;border-collapse:collapse;margin-top:4px;background:var(--surface);border:2px inset var(--edge)}
+.cal-grid th{font:bold 10px var(--ui-font);color:var(--heading);background:var(--gray);border:1px solid var(--dark);padding:3px 0}
+.cal-grid td{font:11px var(--ui-font);text-align:center;padding:4px 0;color:var(--text);cursor:default}
+.cal-grid td.muted{color:var(--muted)}
+.cal-grid td:not(.muted):hover{background:var(--blue);color:#fff}
+.cal-grid td.today{font-weight:bold;outline:1px dotted var(--dot);outline-offset:-3px}
+.cal-grid td.sel{background:var(--blue);color:#fff;font-weight:bold}
+.cal-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:4px}
+.cal-date{font:10px var(--ui-font);color:var(--dim);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cal-btn{background:var(--gray);border:2px outset var(--edge);font:11px var(--ui-font);padding:3px 9px;color:var(--text);cursor:default}
+.cal-btn:active{border-style:inset}
+.titlebar{height:30px;background:linear-gradient(90deg,var(--blue),var(--blue-2));color:#fff;display:flex;align-items:center;justify-content:space-between;padding:3px 5px 3px 9px;font-weight:bold;letter-spacing:.1px}
+.titleleft{display:flex;align-items:center;gap:8px}.appicon{width:18px;height:18px;background:var(--gray);border:2px outset var(--edge);display:grid;place-items:center;color:var(--heading);font-weight:bold;font-size:11px}
+.window-controls{display:flex;gap:3px}.winbtn{width:22px;height:20px;background:var(--gray);border:2px outset var(--edge);display:grid;place-items:center;font:bold 12px var(--ui-font);color:var(--text);line-height:1}
+.menubar{display:flex;gap:6px;padding:4px 6px;position:relative;z-index:60}
+.menuitem{position:relative;padding:5px 10px;border:2px solid transparent;cursor:default;user-select:none;white-space:nowrap;line-height:1.1}
+.menuitem:first-letter{text-decoration:underline}
+.menuitem:hover{border-color:var(--light) var(--black) var(--black) var(--light);background:var(--mid)}
+.menuitem.open,.menuitem:active{border-color:var(--dark) var(--light) var(--light) var(--dark);background:var(--active-2)}
+.menu{display:none;position:absolute;top:100%;left:0;min-width:190px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);box-shadow:2px 2px 0 #0004;padding:3px;z-index:100}
+.menuitem.open .menu{display:block}
+.menu button{display:flex;align-items:center;justify-content:space-between;gap:18px;width:100%;text-align:left;background:transparent;border:0;font:12px var(--ui-font);color:var(--text);padding:5px 9px;cursor:default}
+/* выключенные в config.js пункты (окно терминала) — не показывать вовсе */
+.menu button[hidden]{display:none}
+.menu button:hover{background:var(--blue);color:#fff}
+.menu button .sc{color:var(--dim-3);font-size:11px}
+.menu button:hover .sc{color:#cfe0ff}
+.menu .sep{height:1px;margin:4px;background:var(--dark);border-bottom:1px solid var(--light)}
+.content{border:2px inset var(--edge);padding:18px;background:var(--gray)}
+.welcome{border:2px inset var(--edge);background:var(--surface-2);padding:12px 13px;margin-bottom:14px}.welcome h1{font-size:21px;margin:0 0 7px;font-weight:bold;color:var(--heading)}.welcome p{margin:0;line-height:1.45;color:var(--text-2)}
+.hosts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:15px}.field label{display:block;font-size:11px;font-weight:bold;margin:0 0 5px}.field input{width:100%;min-width:0;padding:6px 7px;background:var(--surface);border:2px inset var(--edge);border-radius:0;font:12px var(--ui-font);color:var(--text);outline-color:var(--heading)}
+.group-title{font-weight:bold;background:var(--blue);color:#fff;padding:6px 8px;margin-bottom:9px}
+.services{display:grid;gap:9px}.service{display:grid;grid-template-columns:37px minmax(0,1fr);gap:10px;align-items:start;background:var(--card);border:2px outset var(--edge);padding:10px}.iconbox{width:35px;height:35px;border:2px inset var(--edge);background:var(--surface-2);display:grid;place-items:center;font-size:19px;line-height:1;color:var(--heading);font-weight:bold;font-family:"Segoe UI Emoji","Noto Color Emoji","Apple Color Emoji",var(--ui-font)}
+.iconbox.is-number{font-family:var(--ui-font);font-size:14px;line-height:1}
+body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14px;font-weight:bold;color:var(--heading);margin:0 0 4px}.service p{font-size:11px;color:var(--dim);margin:0 0 9px}.actions{display:flex;gap:7px;flex-wrap:wrap}.actions a{display:inline-block;text-align:center;text-decoration:none;color:var(--text);background:var(--gray);border:2px outset var(--edge);padding:6px 9px;font-size:11px;min-width:76px}.actions a:active{border-style:inset;padding:7px 8px 5px 10px}.actions a:hover{background:var(--hover)}
+.art-stage{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#2b2b2b;border:2px inset #7a7a7a;box-shadow:inset 0 0 0 1px #1c1c1c}
+.art-wrap{display:inline-flex;align-items:center;justify-content:center;overflow:hidden;padding:10px;max-width:100%}pre{font-family:"DejaVu Sans Mono","Noto Sans Mono",monospace;font-size:11px;line-height:1.05;color:#e8e8e8;white-space:pre;margin:0;max-width:none;font-weight:500;flex-shrink:0}
+.statusbar{display:flex;gap:4px;margin:6px 2px 2px;flex:0 0 auto}.statusbar div{border:2px inset var(--edge);padding:5px 8px;font-size:11px;color:var(--text-2)}.statusbar div:first-child{flex:1}.footer{margin-top:9px;text-align:right;color:var(--text-2);font-size:10px}
+/* --- System Monitor ---------------------------------------------------- */
+#winMonitor{min-width:180px;min-height:150px}
+.monitor-body{display:flex;flex-direction:column;padding:12px;overflow-y:auto;overflow-x:hidden}
+.monitor-inner{display:flex;flex-direction:column;gap:9px;margin:auto 0}
+.metric{display:grid;grid-template-columns:56px minmax(0,1fr) 78px;gap:8px;align-items:center}
+.metric-label{font:bold 11px var(--ui-font);color:var(--heading);letter-spacing:.2px}
+.gauge{height:17px;background:var(--surface);border:2px inset var(--edge);overflow:hidden;flex:0 0 auto}
+.gauge-fill{height:100%;width:0;background:repeating-linear-gradient(90deg,var(--blue) 0 9px,var(--surface) 9px 12px);transition:width .35s linear}
+.metric-value{font:11px var(--ui-font);color:var(--text-3);text-align:center;background:var(--surface);border:2px inset var(--edge);padding:4px 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* заголовок раздела (Storage / RAID) */
+.section{display:flex;align-items:center;gap:7px;font:bold 10px var(--ui-font);letter-spacing:.4px;text-transform:uppercase;color:#fff;background:var(--blue);padding:3px 7px}
+.section .scount{margin-left:auto;font-weight:normal;text-transform:none;background:var(--gray);color:var(--heading);padding:0 6px;border:1px inset var(--edge)}
+/* строка диска или массива */
+.slist{display:flex;flex-direction:column;gap:8px}
+.srow{display:flex;flex-direction:column;gap:4px;min-width:0}
+.srow-head{display:flex;align-items:baseline;gap:7px;min-width:0}
+.srow-name{font:bold 11px var(--ui-font);color:var(--heading);white-space:nowrap}
+.srow-meta{flex:1 1 auto;min-width:0;font-size:9px;color:var(--dim-4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srow-val{flex:0 0 auto;font:11px var(--ui-font);color:var(--text-3);background:var(--surface);border:2px inset var(--edge);padding:2px 6px;white-space:nowrap}
+.srow-sub{font-size:9px;color:var(--dim-4);line-height:1.35;overflow:hidden}
+.srow.is-warn .gauge-fill{background:repeating-linear-gradient(90deg,var(--warn) 0 9px,var(--surface) 9px 12px)}
+.srow.is-work .gauge-fill{background:repeating-linear-gradient(90deg,var(--warn) 0 9px,var(--surface) 9px 12px)}
+.srow.is-crit .gauge-fill,.srow.is-bad .gauge-fill{background:repeating-linear-gradient(90deg,var(--crit) 0 9px,var(--surface) 9px 12px)}
+.srow.is-crit .srow-val,.srow.is-bad .srow-val{color:var(--crit);font-weight:bold}
+/* физические диски внутри RAID-массива */
+.parts{display:flex;flex-wrap:wrap;gap:4px 6px}
+.part{display:inline-flex;align-items:center;gap:4px;font-size:9px;color:var(--dim);background:var(--card);border:1px outset var(--edge);padding:1px 5px;white-space:nowrap}
+.part .flag{font-weight:bold;line-height:1}
+.part.ok .flag{color:var(--ok)}
+.part.spare .flag{color:var(--spare)}
+.part.failed{background:var(--fail-bg);color:var(--fail-fg);border-style:inset}
+.part.failed .flag{color:var(--crit)}
+.monitor-status{display:flex;justify-content:space-between;gap:8px;font-size:10px;color:var(--dim);border-top:1px solid var(--dark);padding-top:7px;margin-top:1px}
+.monitor-status span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+#winMonitor.monitor-offline .gauge-fill{background:repeating-linear-gradient(90deg,var(--dark) 0 9px,var(--surface) 9px 12px);transition:none}
+#winMonitor.monitor-offline .metric-value,#winMonitor.monitor-offline .srow-val{color:var(--dim-5)}
+#winMonitor.monitor-offline .part{opacity:.55}
+#winMonitor.monitor-offline [data-monitor-status]{color:var(--crit);font-weight:bold}
+.titlebar .titleleft{min-width:0}
+.titlebar .titleleft>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.titlebar .appicon{flex:0 0 auto}
+/* узкое окно — плотная раскладка строк метрик */
+.monitor-body.compact{padding:8px}
+.monitor-body.compact .monitor-inner{gap:7px}
+.monitor-body.compact .metric{grid-template-columns:40px minmax(0,1fr) 60px;gap:5px}
+.monitor-body.compact .metric-label{font-size:10px}
+.monitor-body.compact .metric-value{font-size:10px;padding:4px 2px}
+.monitor-body.compact .srow-name{font-size:10px}
+.monitor-body.compact .srow-val{font-size:10px;padding:2px 4px}
+.monitor-body.compact .srow-meta,.monitor-body.compact .srow-sub,.monitor-body.compact .part{font-size:8px}
+.monitor-body.compact .monitor-status{font-size:9px;padding-top:5px}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;padding:20px;z-index:1000}
+.modal-overlay[hidden]{display:none}
+/* Конструктор раскладки — плавающая палитра (не окно панели, в раскладку не входит) */
+.layout-palette{position:fixed;width:252px;max-width:calc(100vw - 16px);z-index:950}
+.layout-palette[hidden]{display:none}
+.palette-body{display:flex;flex-direction:column;gap:7px;padding:7px 6px 8px}
+.palette-group{border:2px inset var(--edge);background:var(--surface);padding:5px 6px 6px;max-height:132px;overflow:auto}
+.palette-head{font-size:11px;font-weight:bold;color:var(--heading);margin-bottom:3px}
+.palette-group label{display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0;cursor:pointer;color:var(--text-strong)}
+.palette-group label.is-off{color:var(--dim-4)}
+.palette-group label input{margin:0}
+.palette-actions{display:flex;gap:6px}
+.palette-actions button{flex:1;font:11px var(--ui-font);padding:4px 6px;border:2px outset var(--edge);background:var(--gray);color:var(--text-strong);cursor:pointer}
+.palette-actions button:active{border-color:var(--black) var(--light) var(--light) var(--black)}
+.palette-hint{font-size:10px;color:var(--text-2);line-height:1.35}
+.help-window{width:min(560px,100%);max-height:80vh;display:flex;flex-direction:column;box-shadow:4px 4px 0 #0006}
+.help-window .titlebar{cursor:move}
+.help-body{flex:1 1 auto;overflow:auto;background:var(--surface);padding:16px;color:var(--text)}
+.help-body h1{margin:0 0 10px;font-size:18px;color:var(--heading)}
+.help-body p,.help-body li{line-height:1.5;margin:0 0 10px}
+.help-body code{background:var(--surface-2);border:1px solid var(--line);padding:1px 4px;font-family:"DejaVu Sans Mono",monospace}
+.winbtn[data-close]{cursor:default}
+/* --- Picture Viewer: картинки и GIF --------------------------------- */
+.art-img{display:block;-webkit-user-select:none;user-select:none;-webkit-user-drag:none}
+.art-img[hidden]{display:none}
+.art-window.dropping .art-stage{outline:2px dashed #6cf;outline-offset:-6px}
+.open-window{width:min(470px,100%)}
+.open-body{border:2px inset var(--edge);padding:14px;background:var(--gray);display:flex;flex-direction:column;gap:10px}
+.open-label{font:bold 11px var(--ui-font);color:var(--heading)}
+.open-row{display:flex;gap:7px;align-items:center}
+.open-input{flex:1 1 auto;min-width:0;border:2px inset var(--edge);background:var(--surface);padding:5px 6px;font:11px var(--ui-font);color:var(--text)}
+.open-hint{font:10px var(--ui-font);color:var(--dim-2);line-height:1.45}
+.open-target{font:11px var(--ui-font);color:var(--heading)}
+.open-hint code{background:var(--surface);border:1px solid var(--line-2);padding:0 3px;font-family:"DejaVu Sans Mono",monospace;color:var(--text)}
+.open-err{font:bold 10px var(--ui-font);color:var(--error);line-height:1.45}
+.open-actions{display:flex;justify-content:flex-end;gap:7px}
+.open-btn{background:var(--gray);border:2px outset var(--edge);font:11px var(--ui-font);padding:5px 14px;color:var(--text);cursor:default}
+.open-btn:active{border-style:inset}
+/* View → Font… — список шрифтов, установленных в системе */
+.font-window{max-height:86vh;display:flex;flex-direction:column}
+.font-window .open-body{flex:1 1 auto;min-height:0}
+.font-list{border:2px inset var(--edge);background:var(--surface);flex:1 1 auto;
+ min-height:110px;max-height:48vh;overflow:auto}
+.font-item{display:flex;align-items:center;justify-content:space-between;gap:8px;
+ width:100%;text-align:left;background:transparent;border:0;
+ border-bottom:1px solid var(--line-2);padding:5px 8px;color:var(--text);
+ font-family:inherit;font-size:15px;cursor:default}
+.font-item:last-child{border-bottom:0}
+.font-item:hover{background:var(--hover)}
+.font-item.on{background:var(--blue);color:#fff}
+.font-item .tick{flex:0 0 auto;font:bold 11px var(--ui-font);color:var(--dim-3)}
+.font-item.on .tick{color:#fff}
+.font-empty{padding:9px 8px;font:11px var(--ui-font);color:var(--dim-2);line-height:1.5}
+/* --- Audio Player ------------------------------------------------------ */
+#winMusic{min-width:250px;min-height:210px}
+.music-body{display:flex;flex-direction:column;gap:6px;padding:10px;overflow:hidden}
+.music-inner{display:flex;flex-direction:column;gap:7px;min-height:0;flex:1 1 auto}
+.music-lcd{background:#000;border:2px inset var(--edge);padding:6px 8px;color:#39ff6a;font:11px "DejaVu Sans Mono",monospace;line-height:1.4;min-width:0;flex:0 0 auto}
+.music-track{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.music-time{color:#7f7;font-size:10px;text-align:right}
+.music-seek{height:14px;background:var(--surface);border:2px inset var(--edge);cursor:pointer;flex:0 0 auto;position:relative;overflow:hidden}
+.music-seek-fill{height:100%;width:0;background:var(--blue)}
+.music-controls{display:flex;gap:5px;flex:0 0 auto}
+.music-btn{flex:1 1 0;background:var(--gray);border:2px outset var(--edge);font:12px var(--ui-font);padding:4px 0;cursor:default;color:var(--text)}
+.music-btn:active{border-style:inset;background:var(--active)}
+.music-row{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.music-lbl{font:10px var(--ui-font);color:var(--text-2)}
+.music-vol{flex:1 1 auto;min-width:40px;height:16px;accent-color:var(--heading)}
+.music-tgl{width:26px;height:22px;background:var(--gray);border:2px outset var(--edge);font:bold 10px var(--ui-font);color:var(--dim-3);cursor:default;flex:0 0 auto}
+.music-tgl.on{border-style:inset;background:var(--active);color:var(--heading)}
+.music-list{flex:1 1 auto;min-height:48px;overflow:auto;background:var(--surface);border:2px inset var(--edge)}
+.music-item{display:block;width:100%;text-align:left;background:none;border:0;padding:4px 6px;font:11px var(--ui-font);color:var(--text);cursor:default;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.music-item:hover{background:var(--hover-2)}
+.music-item.playing{background:var(--blue);color:#fff}
+.music-status{font:10px var(--ui-font);color:var(--dim-2);flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* --- Терминал (окно-пародия на консоль) ----------------------------------
+   Консоль всегда чёрная с моноширинным шрифтом — в обеих темах, как
+   настоящий терминал; рамка, заголовок и кнопки — обычные, общие.
+   Сколько таких окон — решает CONFIG.term.count (1..6, см. TERMS ниже):
+   каждое открывается кнопкой «+» в строке ввода (следующее по кругу),
+   своей кнопкой в таскбаре или командой `open term2` / `open term3`… */
+.appwindow[id^="winTerm"]{min-width:300px;min-height:170px}
+.term-body{display:flex;flex-direction:column;min-height:0;
+ padding:0;border:0;background:#0b0b0b;overflow:hidden}
+.term-out{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 8px;outline:none;
+ font:13px/1.35 "DejaVu Sans Mono","Lucida Console",Consolas,monospace;
+ color:#dcdcdc;white-space:pre-wrap;word-break:break-word}
+.term-line{min-height:1.35em}
+.term-hint{color:#7f7f7f}
+.term-err{color:#ff6b6b}
+.term-ok{color:#3ff06a}
+.term-key{color:#6cb6ff}          /* подписи полей fetch — как в fastfetch */
+/* визуализатор (команда viz): рамка-виджет и цветные полосы спектра */
+.term-viz{line-height:1.2}
+.viz-frame{color:#4a4a4a}
+.viz-lo{color:#3ff06a}
+.viz-mid{color:#e8c14a}
+.viz-hi{color:#ff6b6b}
+.viz-peak{color:#6cb6ff}
+.term-row{display:flex;gap:7px;align-items:center;flex:0 0 auto;
+ padding:5px 8px;border-top:1px solid #2e2e2e;background:#0b0b0b}
+.term-prompt{color:#3ff06a;white-space:pre;
+ font:13px "DejaVu Sans Mono","Lucida Console",Consolas,monospace}
+.term-in{flex:1 1 auto;min-width:0;padding:0;border:0;outline:none;
+ background:transparent;color:#dcdcdc;caret-color:#3ff06a;
+ font:13px "DejaVu Sans Mono","Lucida Console",Consolas,monospace}
+/* «+» в конце строки ввода: прыгает на второй терминал (и обратно) */
+.term-new{flex:0 0 auto;width:20px;height:17px;padding:0;
+ background:#1c1c1c;border:1px solid #4a4a4a;border-radius:2px;
+ color:#7f7f7f;font:12px/1 var(--ui-font);cursor:default}
+.term-new:hover{color:#dcdcdc;border-color:#8a8a8a}
+
+/* --- Скины плеера (Qmmp = Winamp 2) ------------------------------------ */
+/* Панель выбора скина: список из skins/ + кнопка «прочитать .wsz с диска» */
+.music-skins{display:flex;gap:5px;align-items:center;flex:0 0 auto}
+.music-skin-sel{flex:1 1 auto;min-width:0;height:22px;font:11px var(--ui-font);background:var(--surface);border:2px inset var(--edge);color:var(--text)}
+.music-skin-btn{flex:0 0 auto;height:22px;padding:0 7px;background:var(--gray);border:2px outset var(--edge);font:11px var(--ui-font);color:var(--text);cursor:default}
+.music-skin-btn:active{border-style:inset;background:var(--active)}
+/* Холст, на котором рисуется окно Winamp: два канваса — главный и плейлист */
+.skin-host{display:none;flex:1 1 auto;min-height:0;overflow:auto;background:#202020;align-items:flex-start}
+.skin-host.on{display:flex;flex-direction:column}
+.skin-host canvas{display:block;image-rendering:pixelated;cursor:default;flex:0 0 auto}
+.music-inner.off{display:none}
+.music-skins.off{display:none}
+@media(max-width:500px){.hosts{grid-template-columns:1fr}.art-wrap{padding:5px}.menubar{gap:2px}.menuitem{padding:5px 6px}.service{padding:8px}.task{min-width:0}}
+/* совсем узко: остаются только иконки, чтобы часы гарантировально влезали */
+@media(max-width:420px){.task{min-width:0;justify-content:center;padding:5px 6px}.task .tlabel{display:none}}
+
+/* ==========================================================================
+   ТЁМНАЯ ТЕМА — только переопределение переменных, в стилях выше ничего не
+   меняется, поэтому светлая тема остаётся ровно такой же, как была.
+   Включается двумя способами:
+     1) CONFIG.theme='dark' в config.js (там же документация);
+     2) кнопкой «Dark theme» во вкладке View — выбор запоминается в браузере
+        и уезжает в раскладку на сервере, так что он один на всех
+        устройствах; «Reset window layout» возвращает тему из config.js.
+   Цвета взяты под включение Dark Reader: бирюзовый рабочий стол, почти
+   чёрные тела окон, тёмно-синие заголовки, светло-голубые подписи, белый
+   текст, синие и оранжевые шкалы.
+   ========================================================================== */
+/* --- Network: трафик и слушающие порты (GET /api/network) -------------- */
+.net-body{display:flex;flex-direction:column;gap:8px;padding:10px;min-height:0}
+.net-rates{display:flex;gap:18px;align-items:flex-end}
+.net-rate{display:flex;flex-direction:column;gap:1px}
+.net-lbl{font:bold 10px var(--ui-font);color:var(--heading);text-transform:uppercase;letter-spacing:.05em}
+.net-rate b{font:bold 13px "Lucida Console",Consolas,monospace;color:var(--text)}
+.net-total b{font-weight:normal;font-size:11px;color:var(--dim)}
+.net-graph{display:block;width:100%;height:110px;background:#000;border:2px inset var(--edge);flex:0 0 auto}
+.net-legend{display:flex;gap:14px;font:10px "Lucida Console",Consolas,monospace;color:var(--dim);margin-top:-4px}
+.net-legend .lg::before{content:"■ ";font-size:9px}
+.net-legend .lg-rx{color:#3ff06a}
+.net-legend .lg-tx{color:#6cb6ff}
+.net-legend span:last-child{margin-left:auto}
+.net-section{display:flex;justify-content:space-between;align-items:center;font:bold 11px var(--ui-font);color:var(--heading);border-bottom:1px solid var(--line-2);padding-bottom:2px}
+.net-ports{overflow:auto;min-height:0;font:11px "Lucida Console",Consolas,monospace}
+.net-prow{display:grid;grid-template-columns:44px 1fr auto;gap:8px;padding:1px 3px}
+.net-prow:nth-child(odd){background:var(--surface-2)}
+.net-prow .p-proto{color:var(--dim)}
+.net-prow .p-addr{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.net-prow .p-port{font-weight:bold;color:var(--heading);text-align:right}
+.net-empty{color:var(--dim);font-style:italic;padding:2px 3px}
+/* --- Download Manager (POST /api/downloads -> downloads/) --------------- */
+.dl-body{display:flex;flex-direction:column;gap:8px;padding:10px;min-height:0}
+.dl-row{display:flex;gap:6px;flex:0 0 auto}
+.dl-url{flex:1;min-width:0;border:2px inset var(--edge);background:var(--surface);color:var(--text);padding:3px 5px;font:12px var(--ui-font)}
+.dl-btn{background:var(--gray);border:2px outset var(--edge);padding:3px 14px;font:12px var(--ui-font);color:var(--text);cursor:default}
+.dl-btn:active{border-style:inset}
+.dl-list{flex:1 1 auto;min-height:64px;overflow:auto;border:2px inset var(--edge);background:var(--surface);padding:2px}
+.dl-empty{color:var(--dim);font-style:italic;padding:4px}
+.dl-item{display:flex;flex-direction:column;gap:3px;padding:4px 4px 2px;border-bottom:1px solid var(--line)}
+.dl-item:last-child{border-bottom:0}
+.dl-top{display:flex;gap:8px;align-items:center}
+.dl-name{flex:1;min-width:0;font:bold 12px var(--ui-font);color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dl-meta{font:11px "Lucida Console",Consolas,monospace;color:var(--dim);white-space:nowrap}
+.dl-x{width:18px;height:16px;flex:0 0 auto;background:var(--gray);border:2px outset var(--edge);font:bold 11px var(--ui-font);color:var(--text);line-height:1;padding:0;cursor:default}
+.dl-x:active{border-style:inset}
+.dl-bar{height:14px;border:2px inset var(--edge);background:var(--surface-2);overflow:hidden}
+.dl-fill{height:100%;width:0;background-color:#008000;background-image:repeating-linear-gradient(90deg,transparent 0 9px,rgba(255,255,255,.6) 9px 11px);transition:width .2s}
+.dl-item.is-failed .dl-name,.dl-item.is-failed .dl-meta{color:var(--error)}
+.dl-item.is-done .dl-meta{color:var(--ok)}
+.dl-item.is-cancelled .dl-meta{color:var(--dim)}
+.dl-bar.is-unknown .dl-fill{width:100%;background-image:repeating-linear-gradient(45deg,rgba(0,0,0,.35) 0 8px,transparent 8px 16px);animation:dlSlide .9s linear infinite}
+@keyframes dlSlide{to{background-position:22px 0}}
+.dl-status{flex:0 0 auto;font:11px "Lucida Console",Consolas,monospace;color:var(--dim);min-height:14px}
+.dl-status.is-err{color:var(--error)}
+/* --- карточки сервисов: имя-ссылка на окно и живой статус ------------- */
+.svc-open{color:var(--heading);text-decoration:underline;cursor:pointer}
+.svc-open:hover{color:var(--text)}
+.svc-live{margin-top:4px;font:11px "Lucida Console",Consolas,monospace;color:var(--dim)}
+html[data-theme=dark]{
+ --desktop:#147a74;      /* рабочий стол */
+ --gray:#262626;         /* тело окна, таскбар, пункты меню */
+ --light:#5e5e5e;        /* светлый край рамки (слева/сверху) */
+ --mid:#3a3a3a;          /* промежуточные заливки */
+ --dark:#4a4a4a;         /* тёмный край рамки (справа/снизу) */
+ --black:#0b0b0b;        /* почти чёрный: правый край и тени */
+ --blue:#1a4fb8;         /* синий: заголовки, нажатые кнопки */
+ --navy:#0d2f8f;
+ --edge:#6b6b6b;         /* края врезных/выпуклых рамок */
+ --blue-2:#2f7ad0;       /* второй цвет градиента заголовка */
+ --text:#e8e8e8;         /* основной текст */
+ --text-2:#c9c9c9;
+ --text-3:#dcdcdc;
+ --text-strong:#f2f2f2;
+ --dim:#a6a6a6;          /* приглушённые подписи */
+ --dim-2:#9e9e9e;
+ --dim-3:#9a9a9a;
+ --dim-4:#939393;
+ --dim-5:#8f8f8f;
+ --muted:#7d7d7d;
+ --dot:#cfcfcf;          /* пунктирный контур фокуса */
+ --heading:#79b9ff;      /* подписи заголовков (в светлой — тёмно-синий) */
+ --error:#ff7b7b;
+ --crit:#e05555;         /* красная шкала */
+ --ok:#5fd07f;
+ --spare:#e0b04a;
+ --fail-fg:#ffb3b3;
+ --fail-bg:#5a2b2b;
+ --line:#5a5a5a;
+ --line-2:#555;
+ --surface:#141414;      /* поля ввода, списки, шкалы */
+ --surface-2:#1d1d1d;    /* блоки приветствия и справки */
+ --card:#333;            /* карточка сервиса */
+ --active:#3f3f3f;       /* нажатое/выбранное */
+ --active-2:#454545;
+ --hover:#3d3d3d;
+ --hover-2:#3d3d3d;
+ --warn:#e08a1e;         /* оранжевая шкала предупреждения */
+}
+/* холст арта и подложка скина должны отличаться от тёмного тела окна */
+html[data-theme=dark] .art-stage{background:#191919;border-color:#5a5a5a;box-shadow:inset 0 0 0 1px #0e0e0e}
+html[data-theme=dark] .skin-host{background:#141414}
+/* полосы прокрутки — под тему */
+html[data-theme=dark] *{scrollbar-color:#5a5a5a #1b1b1b;scrollbar-width:thin}
+html[data-theme=dark] ::-webkit-scrollbar{width:14px;height:14px}
+html[data-theme=dark] ::-webkit-scrollbar-track{background:#1b1b1b}
+html[data-theme=dark] ::-webkit-scrollbar-thumb{background:#5a5a5a;border:2px outset #6b6b6b}
+html[data-theme=dark] ::-webkit-scrollbar-button{background:#3a3a3a;border:2px outset #6b6b6b}
+</style>
+<style id="openstep-skin" media="not all">
+/* ==========================================================================
+   Скин NeXTSTEP / WindowMaker / AfterStep для Server Hub.
+   Лежит прямо в index.html и выключен (media="not all"), пока не выбран
+   скин WindowMaker: View -> WindowMaker skin, ссылка ?skin=wm или
+   localStorage nerevar-hub.skin (включает его загрузчик в head до первой
+   отрисовки). Блок идёт после главного стиля, поэтому перекрывает и
+   переменные светлой темы, и блок html[data-theme=dark]. Поведение панели
+   не меняется — только цвета и форма.
+   ========================================================================== */
+
+/* --- палитра: одна и та же в обеих темах (NeXT был светло-серым) --------- */
+:root,html[data-theme=light],html[data-theme=dark]{
+ --ui-font:"Lucida Grande","Lucida Sans",Helvetica,Arial,sans-serif;
+ --desktop:#131313;--gray:#aaaaaa;--light:#ffffff;--mid:#c0c0c0;
+ --dark:#666666;--black:#000000;--blue:#000000;--navy:#000000;
+ --edge:#ffffff;--blue-2:#2a2a2a;
+ --text:#000000;--text-2:#1a1a1a;--text-3:#111111;--text-strong:#000000;
+ --dim:#333333;--dim-2:#404040;--dim-3:#4d4d4d;--dim-4:#5a5a5a;--dim-5:#6b6b6b;
+ --muted:#999999;--dot:#000000;--heading:#000000;
+ --error:#990000;--crit:#990000;--ok:#006400;--spare:#806000;
+ --fail-fg:#800000;--fail-bg:#e0c0c0;--line:#999999;--line-2:#777777;
+ --surface:#ffffff;--surface-2:#b8b8b8;--card:#b8b8b8;
+ --active:#999999;--active-2:#999999;--hover:#c0c0c0;--hover-2:#c0c0c0;
+ --warn:#b06000}
+
+/* --- рабочий стол: почти чёрный с мелкой штриховкой (стиппл X11) -------- */
+body{background-color:#131313;
+ background-image:repeating-conic-gradient(#171717 0 25%,#101010 0 50%);
+ background-size:8px 8px}
+
+/* --- окна: тонкая чёрная рамка, заголовок встык, жёсткая тень ---------- */
+.window,.appwindow{border:1px solid #000;padding:0;
+ box-shadow:3px 3px 0 rgba(0,0,0,.5)}
+
+/* --- заголовок: в фокусе — сплошной чёрный, без фокуса — полосатый ------ */
+.titlebar{height:22px;padding:0 5px;font-size:12px;position:relative}
+.appwindow>.titlebar{background:#000;color:#fff}
+.appwindow:not(.active)>.titlebar{
+ background:repeating-linear-gradient(180deg,#000 0 1px,#a8a8a8 1px 4px);
+ color:#000}
+.window>.titlebar{background:#000;color:#fff}
+
+/* --- кнопки заголовка: квадраты NeXT; крестик — слева ------------------ */
+.titlebar .appicon{display:none} /* в NeXT значок приложения живёт в доке */
+.titlebar .titleleft{flex:1 1 auto;justify-content:center;padding-left:30px}
+.winbtn{width:20px;height:18px;font-size:10px;border:1px solid;
+ border-color:#ffffff #666666 #666666 #ffffff;background:#b0b0b0;color:#000}
+.winbtn:active{border-color:#666666 #ffffff #ffffff #666666;background:#000;color:#fff}
+.titlebar .window-controls .winbtn:last-child{position:absolute;
+ left:5px;top:50%;transform:translateY(-50%)}
+
+/* --- меню: открытое название — чёрная плашка с белым текстом (NeXT) ----- */
+.menuitem.open,.menuitem:active{background:#000;color:#fff;border-color:#000}
+.menu{border:1px solid #000;box-shadow:3px 3px 0 rgba(0,0,0,.5);padding:2px}
+.menu .sep{background:#000;border-bottom:0}
+
+/* --- док вместо таскбара: СПРАВА, квадратные плитки — как в NeXTSTEP
+   (там док стоял справа) и на фото WindowMaker. JS панели доком не
+   пользуется (только data-window у плиток и #clock), а раскладка
+   считается от scene.clientWidth — это чистая косметика: правая
+   полоса стола отдана доку, календарь открывается слева от него.
+   Подписи убраны, как на фото, — квадрат с буквой; цифровая плашка
+   в углу различает одинаковые буквы (второй просмотрщик, второй
+   терминал и т.д.). Иконки вместо букв задаются отдельным файлом
+   dock.json: загрузчик читает его и добавляет правила background-image. */
+.taskbar{top:0;bottom:0;left:auto;right:0;width:64px;height:auto;
+ flex-direction:column;align-items:stretch;gap:4px;padding:6px 5px;
+ background:#131313;border-top:0;border-right:0;border-left:1px solid #555;
+ overflow-x:hidden;overflow-y:auto}
+.scene{left:0;right:64px;bottom:0}
+.task{flex-direction:column;gap:0;height:auto;aspect-ratio:1;
+ min-width:0;max-width:none;justify-content:center;align-items:center;
+ text-align:center;padding:4px}
+.task .ticon{position:relative;width:44px;height:44px;font-size:20px}
+.task .tlabel{display:none}
+/* плашка номера: у копий окон (winArt2…, winTerm2…) — в углу буквы */
+.task .ticon::after{position:absolute;right:-3px;bottom:-3px;
+ font:bold 9px/1 var(--ui-font);color:#fff;background:#000;
+ padding:1px 2px;border:1px solid #fff}
+.task[data-window=winArt2] .ticon::after,
+.task[data-window=winTerm2] .ticon::after{content:"2"}
+.task[data-window=winArt3] .ticon::after,
+.task[data-window=winTerm3] .ticon::after{content:"3"}
+.task[data-window=winArt4] .ticon::after,
+.task[data-window=winTerm4] .ticon::after{content:"4"}
+.task[data-window=winArt5] .ticon::after,
+.task[data-window=winTerm5] .ticon::after{content:"5"}
+.task[data-window=winArt6] .ticon::after,
+.task[data-window=winTerm6] .ticon::after{content:"6"}
+.taskbar .clock{flex:0 0 auto;aspect-ratio:1;margin-top:2px;padding:7px 2px;
+ background:#000;border-color:#666 #333 #333 #666}
+.taskbar .clock .ctime{color:#f0f0f0}
+.taskbar .clock .cdate{display:none}
+.calpop{left:auto;right:72px;bottom:8px}
+
+/* --- полосы прокрутки: серые, с квадратной кнопкой, как в NeXT --------- */
+html ::-webkit-scrollbar,html[data-theme=dark] ::-webkit-scrollbar{
+ width:15px;height:15px}
+html ::-webkit-scrollbar-track,html[data-theme=dark] ::-webkit-scrollbar-track{
+ background:#c4c4c4}
+html ::-webkit-scrollbar-thumb,html[data-theme=dark] ::-webkit-scrollbar-thumb{
+ background:#a0a0a0;border:1px outset #e0e0e0}
+html ::-webkit-scrollbar-thumb:hover{background:#b0b0b0}
+html ::-webkit-scrollbar-button,
+html[data-theme=dark] ::-webkit-scrollbar-button{
+ background-color:#b0b0b0;border:1px outset #e8e8e8}
+*,html[data-theme=dark] *{scrollbar-color:#8f8f8f #c0c0c0;scrollbar-width:auto}
+
+/* --- шкалы: синие сегменты вместо чёрных (акцент, как в темах WM) ------ */
+.gauge-fill{background:repeating-linear-gradient(90deg,#1e3fa8 0 9px,var(--surface) 9px 12px)}
+.music-seek-fill{background:#1e3fa8}
+
+/* --- хват изменения размера — горизонтальные рёбра (NeXT-грип) --------- */
+.resize-grip{width:15px;height:15px;
+ background-image:repeating-linear-gradient(180deg,transparent 0 3px,rgba(0,0,0,.5) 3px 4px)}
+
+/* --- цветовые схемы в духе тем WindowMaker -----------------------------
+   Три схемы: gray (дефолт, NeXT-серый — просто переменные выше), steel
+   (стиль SteelBlue: сталь с синим хромом) и dark (тёмная тема в духе
+   Dark/Nightmare). Схему выбирает загрузчик: параметр ?wm=steel или
+   сохранённый выбор из localStorage (nerevar-hub.wmtheme), а стартовый
+   дефолт — CONFIG.wmtheme в config.js; переключатель —
+   три плитки над часами в доке (см. wm-widget ниже). Серая схема —
+   дефолт, атрибут html[data-wmtheme] для неё не ставится. */
+html[data-wmtheme=steel]{
+ --desktop:#141b26;--gray:#a9b8cb;--light:#f2f6fb;--mid:#c3cede;
+ --dark:#5d7391;--black:#000000;--blue:#1c3050;--navy:#12233c;
+ --edge:#e8eef6;--blue-2:#24344a;
+ --text:#0b1622;--text-2:#152436;--text-3:#101d2e;--text-strong:#000814;
+ --dim:#2c3d52;--dim-2:#354860;--dim-3:#3f5269;--dim-4:#495d74;--dim-5:#556980;
+ --muted:#7e8ea3;--dot:#12233c;--heading:#12233c;
+ --error:#a01818;--crit:#a01818;--ok:#1c6630;--spare:#8a6a10;
+ --fail-fg:#8a1414;--fail-bg:#dcc8cc;--line:#7d8ea6;--line-2:#66798f;
+ --surface:#f4f7fb;--surface-2:#9fadbf;--card:#a4b3c6;
+ --active:#7e95b2;--active-2:#7e95b2;--hover:#c2cede;--hover-2:#c2cede;
+ --warn:#b06a10}
+html[data-wmtheme=steel] body{background-color:#141b26;
+ background-image:repeating-conic-gradient(#18202e 0 25%,#101722 0 50%)}
+html[data-wmtheme=steel] .appwindow>.titlebar{background:#1c3050;color:#fff}
+html[data-wmtheme=steel] .appwindow:not(.active)>.titlebar{
+ background:repeating-linear-gradient(180deg,#1c3050 0 1px,#a9b8cb 1px 4px);
+ color:#0b1622}
+html[data-wmtheme=steel] .window>.titlebar{background:#1c3050;color:#fff}
+html[data-wmtheme=steel] .menuitem.open,
+html[data-wmtheme=steel] .menuitem:active{background:#1c3050;color:#fff;
+ border-color:#1c3050}
+html[data-wmtheme=steel] .winbtn{background:#b6c3d3;
+ border-color:#eef3f9 #4a5f7c #4a5f7c #eef3f9;color:#0b1622}
+html[data-wmtheme=steel] .winbtn:active{background:#1c3050;color:#fff;
+ border-color:#4a5f7c #eef3f9 #eef3f9 #4a5f7c}
+html[data-wmtheme=steel] .taskbar{background:#101722;border-left-color:#3d4f66}
+html[data-wmtheme=steel] .taskbar .clock{background:#0b1420;
+ border-color:#42566e #263346 #263346 #42566e}
+html[data-wmtheme=steel] .taskbar .clock .ctime{color:#dce6f2}
+html[data-wmtheme=steel] ::-webkit-scrollbar-track{background:#9fadc0}
+html[data-wmtheme=steel] ::-webkit-scrollbar-thumb{background:#7e93ad;
+ border:1px outset #c8d3e0}
+html[data-wmtheme=steel] ::-webkit-scrollbar-thumb:hover{background:#8fa3ba}
+html[data-wmtheme=steel] ::-webkit-scrollbar-button{background-color:#8398b0;
+ border:1px outset #c8d3e0}
+html[data-wmtheme=steel] *{scrollbar-color:#7e93ad #9fadc0}
+html[data-wmtheme=steel] .gauge-fill{background:
+ repeating-linear-gradient(90deg,#24558f 0 9px,var(--surface) 9px 12px)}
+html[data-wmtheme=steel] .music-seek-fill{background:#24558f}
+
+html[data-wmtheme=dark]{
+ --desktop:#131313;--gray:#3f3f3f;--light:#e6e6e6;--mid:#4a4a4a;
+ --dark:#6a6a6a;--black:#000000;--blue:#000000;--navy:#000000;
+ --edge:#8a8a8a;--blue-2:#2a2a2a;
+ --text:#e8e8e8;--text-2:#d8d8d8;--text-3:#dcdcdc;--text-strong:#ffffff;
+ --dim:#a8a8a8;--dim-2:#a0a0a0;--dim-3:#989898;--dim-4:#909090;--dim-5:#888888;
+ --muted:#808080;--dot:#e8e8e8;--heading:#ffffff;
+ --error:#ff6b6b;--crit:#ff6b6b;--ok:#4ecf6a;--spare:#e0b040;
+ --fail-fg:#ffb0b0;--fail-bg:#5a2020;--line:#6a6a6a;--line-2:#7a7a7a;
+ --surface:#2b2b2b;--surface-2:#555555;--card:#4a4a4a;
+ --active:#3f5f8f;--active-2:#3f5f8f;--hover:#555555;--hover-2:#555555;
+ --warn:#e0a040}
+html[data-wmtheme=dark] .appwindow:not(.active)>.titlebar{
+ background:repeating-linear-gradient(180deg,#000 0 1px,#5f5f5f 1px 4px);
+ color:#c8c8c8}
+html[data-wmtheme=dark] .menuitem.open,
+html[data-wmtheme=dark] .menuitem:active{background:#e6e6e6;color:#000;
+ border-color:#e6e6e6}
+html[data-wmtheme=dark] .winbtn{background:#5a5a5a;
+ border-color:#8a8a8a #2a2a2a #2a2a2a #8a8a8a;color:#f0f0f0}
+html[data-wmtheme=dark] .winbtn:active{background:#e6e6e6;color:#000;
+ border-color:#2a2a2a #8a8a8a #8a8a8a #2a2a2a}
+html[data-wmtheme=dark] ::-webkit-scrollbar-track{background:#2b2b2b}
+html[data-wmtheme=dark] ::-webkit-scrollbar-thumb{background:#5a5a5a;
+ border:1px outset #7a7a7a}
+html[data-wmtheme=dark] ::-webkit-scrollbar-thumb:hover{background:#6a6a6a}
+html[data-wmtheme=dark] ::-webkit-scrollbar-button{background-color:#555555;
+ border:1px outset #7a7a7a}
+html[data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
+html[data-wmtheme=dark] .gauge-fill{background:
+ repeating-linear-gradient(90deg,#3a6fd8 0 9px,var(--surface) 9px 12px)}
+html[data-wmtheme=dark] .music-seek-fill{background:#3a6fd8}
+
+/* --- переключатель схем: три плитки над часами в доке ------------------- */
+.wmpal{display:flex;gap:2px;justify-content:center;flex:0 0 auto;
+ margin-top:2px;padding:0}
+.wmpal-chip{width:16px;height:16px;padding:0;cursor:pointer;
+ border:1px outset #8f8f8f}
+.wmpal-chip:focus-visible{outline:1px solid #fff;outline-offset:1px}
+.wmpal-gray{background:linear-gradient(135deg,#aaaaaa 50%,#000000 50%)}
+.wmpal-steel{background:linear-gradient(135deg,#a9b8cb 50%,#1c3050 50%)}
+.wmpal-dark{background:linear-gradient(135deg,#4a4a4a 50%,#0d0d0d 50%)}
+.wmpal-chip.on{border-color:#fff;box-shadow:0 0 0 1px #fff}
+</style>
+<script src="config.js"></script>
+<script>
+/* Тема — до первой отрисовки, чтобы рабочий стол не мигнул светлым.
+   Порядок: выбор кнопки View (localStorage) -> CONFIG.theme -> светлая.
+   Тот же порядок повторяет applyConfig() в основном скрипте ниже. */
+(function(){
+ var t=null;
+ try{t=localStorage.getItem('nerevar-hub.theme')}catch(e){}
+ if(t!=='dark'&&t!=='light')t=(window.CONFIG&&window.CONFIG.theme==='dark')?'dark':'light';
+ document.documentElement.setAttribute('data-theme',t);
+ /* Шрифт — тоже до первой отрисовки: иначе панель успеет отрисоваться
+    шрифтом по умолчанию и мигнёт. Порядок тот же: выбор из View → Font…
+    (localStorage) -> CONFIG.font -> шрифт по умолчанию. */
+ var f=null;
+ try{f=localStorage.getItem('nerevar-hub.font')}catch(e){}
+ if(!f)f=(window.CONFIG&&String(window.CONFIG.font||'').trim())||'';
+ if(f)document.documentElement.style.setProperty('--ui-font',f);
+ /* Скин WindowMaker — тоже до первой отрисовки: блок openstep-skin
+    лежит в head с media="not all" (выключен), здесь включаем, если
+    выбран. Порядок: ?skin= (старый адрес /openstep.html ведёт сюда)
+    -> выбор из View → WindowMaker skin (localStorage) -> Win9x.
+    Цветовая схема скина: ?wm= -> сохранённый выбор -> CONFIG.wmtheme
+    только под скином, но включается безвредно. */
+ (function(){
+  var s=null;
+  try{s=new URLSearchParams(location.search).get('skin')}catch(e){}
+  if(s!=='wm'&&s!=='win9x'){
+   try{s=localStorage.getItem('nerevar-hub.skin')}catch(e){}
+  }
+  var st=document.getElementById('openstep-skin');
+  if(s!=='wm'||!st)return;
+  st.media='all';
+  var w=null;
+  try{w=new URLSearchParams(location.search).get('wm')}catch(e){}
+  if(w!=='steel'&&w!=='dark'){
+   try{w=localStorage.getItem('nerevar-hub.wmtheme')}catch(e){}
+  }
+  /* стартовая схема из config.js — только если ни ссылка ?wm=, ни выбор
+     в браузере ничего не задали: ?wm= -> localStorage -> CONFIG.wmtheme */
+  if(w!=='steel'&&w!=='dark'){
+   w=(window.CONFIG&&window.CONFIG.wmtheme)||'';
+  }
+  if(w==='steel'||w==='dark')document.documentElement.setAttribute('data-wmtheme',w);
+ })();
+})();
+</script>
+</head>
+<body>
+<div class="scene" id="scene">
+  <section class="appwindow" id="winServers">
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-server-icon>S</span><span data-server-name>My Home Server</span></div><div class="window-controls"><span class="winbtn" data-win-min="winServers">_</span><span class="winbtn" data-win-max="winServers">□</span><span class="winbtn" data-win-close="winServers">×</span></div></div>
+    <nav class="menubar">
+      <div class="menuitem" data-menu>File
+        <div class="menu">
+          <button data-action="reload">Refresh</button>
+          <button data-action="copy-links">Copy service links</button>
+          <div class="sep"></div>
+          <button data-action="open-image">Open image…</button>
+          <button data-action="back-ascii">Back to ASCII art</button>
+          <div class="sep"></div>
+          <button data-action="audio">Audio player</button>
+          <button data-action="terminal">Terminal</button>
+          <button data-action="network">Network</button>
+          <button data-action="downloads">Download Manager</button>
+          <div class="sep"></div>
+          <button data-action="exit">Exit</button>
+        </div>
+      </div>
+      <div class="menuitem" data-menu>View
+        <div class="menu">
+          <button data-action="zoom-in">Zoom in<span class="sc">+</span></button>
+          <button data-action="zoom-out">Zoom out<span class="sc">&minus;</span></button>
+          <button data-action="zoom-reset">Reset zoom</button>
+          <div class="sep"></div>
+          <button data-action="toggle-services">Show / hide services</button>
+          <div class="sep"></div>
+          <button data-action="layout">Layout constructor…</button>
+          <button data-action="layout-save">Save window layout</button>
+          <button data-action="layout-reset">Reset window layout</button>
+          <div class="sep"></div>
+          <button data-action="theme">Dark theme<span class="sc" data-theme-mark>✓</span></button>
+          <button data-action="skin">WindowMaker skin<span class="sc" data-skin-mark>✓</span></button>
+          <button data-action="font">Font…</button>
+          <div class="sep"></div>
+          <button data-action="toggle-fullscreen">Fullscreen</button>
+        </div>
+      </div>
+      <div class="menuitem" data-action="favorite">Favorites</div>
+      <div class="menuitem" data-action="help">Help</div>
+    </nav>
+    <div class="winbody">
+          <section class="welcome"><h1>Welcome</h1><p>Personal home server dashboard. Replace this text with your own description.</p></section>
+          <div class="hosts">
+            <div class="field"><label for="lanHost">Local network address</label><input id="lanHost" value="192.168.1.10" placeholder="192.168.1.10"></div>
+            <div class="field"><label for="tailHost">Tailscale address</label><input id="tailHost" value="myhost" placeholder="100.x.y.z / myhost"></div>
+          </div>
+<div class="group-title">Available services</div>
+          <div class="services"></div>
+        </div>
+    <div class="statusbar"><div>Ready</div><div>6 services</div><div>Local / Tailscale</div></div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <section class="appwindow art-window" id="winArt">
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-art-icon>P</span><span><span data-art-title>Picture Viewer</span> &mdash; <span data-art-file>ASCII_ART.TXT</span></span></div><div class="window-controls"><span class="winbtn" data-win-min="winArt">_</span><span class="winbtn" data-win-max="winArt">□</span><span class="winbtn" data-win-close="winArt">×</span></div></div>
+    <div class="winbody art-body">
+      <div class="art-stage"><div class="art-wrap"><pre><!-- ASCII-арт живёт отдельно: pics/ASCII_ART.TXT, сюда он подставляется при загрузке (CONFIG.artFile). --></pre><img class="art-img" alt="" hidden></div></div></div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <section class="appwindow" id="winMonitor" data-autoplace="1" hidden>
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-monitor-icon>M</span><span data-monitor-title>System Monitor</span></div><div class="window-controls"><span class="winbtn" data-win-min="winMonitor">_</span><span class="winbtn" data-win-max="winMonitor">□</span><span class="winbtn" data-win-close="winMonitor">×</span></div></div>
+    <div class="winbody monitor-body">
+      <div class="monitor-inner">
+        <div class="metric" data-metric="cpu"><div class="metric-label">CPU</div><div class="gauge"><div class="gauge-fill"></div></div><div class="metric-value">&mdash;</div></div>
+        <div class="metric" data-metric="ram"><div class="metric-label">RAM</div><div class="gauge"><div class="gauge-fill"></div></div><div class="metric-value">&mdash;</div></div>
+        <div class="metric" data-metric="load"><div class="metric-label">Load</div><div class="gauge"><div class="gauge-fill"></div></div><div class="metric-value">&mdash;</div></div>
+        <!-- Разделы Storage и RAID заполняются из /api/stats (см. renderStorage) -->
+        <div class="section" data-storage-head hidden><span>Storage</span><span class="scount" data-storage-count></span></div>
+        <div class="slist" data-disk-list></div>
+        <div class="section" data-raid-head hidden><span>RAID</span><span class="scount" data-raid-count></span></div>
+        <div class="slist" data-raid-list></div>
+        <div class="monitor-status"><span data-monitor-status>Waiting&hellip;</span><span data-monitor-uptime></span></div>
+      </div>
+    </div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <section class="appwindow" id="winMusic" hidden>
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-music-icon>A</span><span data-music-title>Audio Player</span></div><div class="window-controls"><span class="winbtn" data-win-min="winMusic">_</span><span class="winbtn" data-win-max="winMusic">□</span><span class="winbtn" data-win-close="winMusic">×</span></div></div>
+    <div class="winbody music-body">
+      <div class="music-skins" data-skin-bar>
+        <select class="music-skin-sel" data-skin-select title="Qmmp / Winamp 2 skins"></select>
+        <button class="music-skin-btn" type="button" data-skin-open title="Load a .wsz / .zip skin from this computer">Skin&hellip;</button>
+        <input type="file" data-skin-file accept=".wsz,.zip" hidden>
+      </div>
+      <div class="skin-host" data-skin-host></div>
+      <div class="music-inner">
+        <div class="music-lcd">
+          <div class="music-track" data-music-track>No track</div>
+          <div class="music-time"><span data-music-cur>0:00</span> / <span data-music-dur>0:00</span></div>
+        </div>
+        <div class="music-seek" data-music-seek title="Click to seek"><div class="music-seek-fill" data-music-seek-fill></div></div>
+        <div class="music-controls">
+          <button class="music-btn" type="button" data-music="prev" title="Previous">&#9664;&#9664;</button>
+          <button class="music-btn music-play" type="button" data-music="play" title="Play / Pause">&#9654;</button>
+          <button class="music-btn" type="button" data-music="stop" title="Stop">&#9632;</button>
+          <button class="music-btn" type="button" data-music="next" title="Next">&#9654;&#9654;</button>
+        </div>
+        <div class="music-row">
+          <span class="music-lbl">Vol</span>
+          <input class="music-vol" type="range" min="0" max="100" step="1" value="80" data-music-vol aria-label="Volume">
+          <button class="music-tgl" type="button" data-music="shuffle" title="Shuffle">S</button>
+          <button class="music-tgl" type="button" data-music="loop" title="Repeat">R</button>
+        </div>
+        <div class="music-list" data-music-list></div>
+      </div>
+      <div class="music-status" data-music-status>Loading&hellip;</div>
+    </div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <section class="appwindow" id="winTerm" hidden>
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-term-icon>&gt;</span><span data-term-title>Terminal</span></div><div class="window-controls"><span class="winbtn" data-win-min="winTerm">_</span><span class="winbtn" data-win-max="winTerm">□</span><span class="winbtn" data-win-close="winTerm">×</span></div></div>
+    <div class="winbody term-body">
+      <!-- Прокрутка живёт на term-out: скроллить можно колесом и кликами,
+           ввод — строкой ниже. Содержимое печатают функции termPrint… -->
+      <div class="term-out" data-term-out tabindex="0"></div>
+      <form class="term-row" data-term-form autocomplete="off">
+        <span class="term-prompt" data-term-prompt>nerevar@server:~$</span>
+        <input class="term-in" data-term-in type="text" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Command">
+        <button type="button" class="term-new" data-term-new title="Next terminal">+</button>
+      </form>
+    </div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <!-- Второй терминал: тот же набор узлов, что и первый (одни и те же
+       data-* — скрипт строит из них экземпляр TERMS), но своё состояние:
+       история ввода, партия блэкджека и стартовый вывод живут отдельно.
+       Он же шаблон: при CONFIG.term.count > 2 окно копируется дальше
+       (winTerm3…), при count = 1 убирается. -->
+  <section class="appwindow" id="winTerm2" hidden>
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-term-icon>&gt;</span><span data-term-title>Terminal 2</span></div><div class="window-controls"><span class="winbtn" data-win-min="winTerm2">_</span><span class="winbtn" data-win-max="winTerm2">□</span><span class="winbtn" data-win-close="winTerm2">×</span></div></div>
+    <div class="winbody term-body">
+      <div class="term-out" data-term-out tabindex="0"></div>
+      <form class="term-row" data-term-form autocomplete="off">
+        <span class="term-prompt" data-term-prompt>nerevar@server:~$</span>
+        <input class="term-in" data-term-in type="text" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Command (terminal 2)">
+        <button type="button" class="term-new" data-term-new title="Next terminal">+</button>
+      </form>
+    </div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <!-- Network: трафик (/proc/net/dev) и слушающие порты (/proc/net/tcp{,6}),
+       всё из одного GET /api/network; опрос идёт из app.js (netTick) -->
+  <section class="appwindow" id="winNetwork" hidden>
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-network-icon>N</span><span data-network-title>Network</span></div><div class="window-controls"><span class="winbtn" data-win-min="winNetwork">_</span><span class="winbtn" data-win-max="winNetwork">□</span><span class="winbtn" data-win-close="winNetwork">×</span></div></div>
+    <div class="winbody net-body">
+      <div class="net-rates">
+        <div class="net-rate"><span class="net-lbl">Down</span><b data-net-rx>&mdash;</b></div>
+        <div class="net-rate"><span class="net-lbl">Up</span><b data-net-tx>&mdash;</b></div>
+        <div class="net-rate net-total"><span class="net-lbl">Total</span><b data-net-total>&mdash;</b></div>
+      </div>
+      <canvas class="net-graph" data-net-graph title="Traffic, last 60 s"></canvas>
+      <div class="net-legend"><span class="lg lg-rx">RX</span><span class="lg lg-tx">TX</span><span data-net-scale>&nbsp;</span></div>
+      <div class="section net-section"><span>Listening ports</span><span class="scount" data-net-port-count></span></div>
+      <div class="net-ports" data-net-ports><div class="net-empty">Waiting&hellip;</div></div>
+    </div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+
+  <!-- Download Manager: URL -> фоновый поток на сервере -> папка downloads/;
+       список опрашивается из app.js (dlTick), лимит — CONFIG.downloads.maxMB -->
+  <section class="appwindow" id="winDownloads" hidden>
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-downloads-icon>D</span><span data-downloads-title>Download Manager</span></div><div class="window-controls"><span class="winbtn" data-win-min="winDownloads">_</span><span class="winbtn" data-win-max="winDownloads">□</span><span class="winbtn" data-win-close="winDownloads">×</span></div></div>
+    <div class="winbody dl-body">
+      <form class="dl-row" data-dl-form>
+        <input class="dl-url" data-dl-url type="text" spellcheck="false" autocomplete="off"
+               placeholder="http://example.com/file.zip" aria-label="URL to download">
+        <button class="dl-btn" type="submit">Start</button>
+      </form>
+      <div class="dl-list" data-dl-list><div class="dl-empty">No downloads yet</div></div>
+      <div class="dl-status" data-dl-status>Idle</div>
+    </div>
+    <div class="resize-grip" data-resize></div>
+  </section>
+</div>
+<audio id="musicAudio" preload="metadata"></audio>
+<div class="taskbar" id="taskbar">
+  <button class="task" data-window="winServers"><span class="ticon" data-server-icon>S</span><span class="tlabel" data-server-name>My Home Server</span></button>
+  <button class="task" data-window="winArt"><span class="ticon" data-art-icon>P</span><span class="tlabel" data-art-title>Picture Viewer</span></button>
+  <button class="task" data-window="winMonitor"><span class="ticon" data-monitor-icon>M</span><span class="tlabel" data-monitor-title>System Monitor</span></button>
+  <button class="task" data-window="winMusic"><span class="ticon" data-music-icon>A</span><span class="tlabel" data-music-title>Audio Player</span></button>
+  <button class="task" data-window="winTerm"><span class="ticon" data-term-icon>&gt;</span><span class="tlabel" data-term-title>Terminal</span></button>
+  <button class="task" data-window="winTerm2"><span class="ticon" data-term-icon>&gt;</span><span class="tlabel" data-term-title>Terminal 2</span></button>
+  <button class="task" data-window="winNetwork"><span class="ticon" data-network-icon>N</span><span class="tlabel" data-network-title>Network</span></button>
+  <button class="task" data-window="winDownloads"><span class="ticon" data-downloads-icon>D</span><span class="tlabel" data-downloads-title>Download Manager</span></button>
+  <span class="spacer"></span>
+  <div class="clock" id="clock"><span class="ctime" data-clock-time>--:--</span><span class="cdate" data-clock-date>--</span></div>
+</div>
+<!-- Календарь: открывается кликом по часам в таскбаре -->
+<div class="calpop" id="calPop" hidden>
+  <div class="cal-head">
+    <button class="cal-nav" data-cal="prev" title="Previous month">&#9664;</button>
+    <span class="cal-title" data-cal-label>--</span>
+    <button class="cal-nav" data-cal="next" title="Next month">&#9654;</button>
+  </div>
+  <table class="cal-grid">
+    <thead><tr><th>Su</th><th>Mo</th><th>Tu</th><th>We</th><th>Th</th><th>Fr</th><th>Sa</th></tr></thead>
+    <tbody data-cal-body></tbody>
+  </table>
+  <div class="cal-foot">
+    <span class="cal-date" data-cal-long></span>
+    <button class="cal-btn" data-cal-today>Today</button>
+  </div>
+</div>
+<div class="modal-overlay" id="helpOverlay" hidden>
+  <section class="window help-window" id="helpWindow">
+    <div class="titlebar" data-drag-window>
+      <div class="titleleft"><span class="appicon">?</span><span><span data-help-title>Help</span> &mdash; <span data-server-name>My Home Server</span></span></div>
+      <div class="window-controls"><span class="winbtn" data-close="helpOverlay">&times;</span></div>
+    </div>
+    <!-- Содержимое справки берётся из CONFIG.help (файл config.js).
+     Чтобы задать его прямо в разметке — просто напиши свой HTML
+     внутрь <div data-help-body> ... </div>, он будет перезаписан при загрузке. -->
+    <div class="content help-body" data-help-body>
+      <h1>Help</h1>
+      <p>Replace this help text with your own.</p>
+    </div>
+  </section>
+</div>
+<!-- Диалог открытия картинки (File → Open image…) -->
+<div class="modal-overlay" id="openOverlay" hidden>
+  <section class="window open-window">
+    <div class="titlebar">
+      <div class="titleleft"><span class="appicon">P</span><span>Open image</span></div>
+      <div class="window-controls"><span class="winbtn" data-close="openOverlay">&times;</span></div>
+    </div>
+    <div class="open-body">
+      <label class="open-label" for="artUrl">File or URL</label>
+      <div class="open-target">Opens in <b data-open-target>Picture Viewer</b></div>
+      <div class="open-row">
+        <input class="open-input" id="artUrl" type="text" spellcheck="false" autocomplete="off"
+               placeholder="http://192.168.1.10/pics/cat.gif">
+        <button class="open-btn" id="artBrowse" type="button">Browse…</button>
+      </div>
+      <div class="open-hint">PNG · JPG · GIF (animated) · WEBP · SVG — or simply drop a file
+        onto the Picture Viewer window.<br>
+        From this server: <code>/pics/your-file.gif</code> — or <code>~.jpg</code>,
+        <code>~.gif</code>, <code>~</code> for a random one from <code>pics/</code>.</div>
+      <div class="open-err" id="artErr" hidden></div>
+      <div class="open-actions">
+        <button class="open-btn" id="artOpenOk" type="button">Open</button>
+        <button class="open-btn" data-close="openOverlay" type="button">Cancel</button>
+      </div>
+    </div>
+  </section>
+</div>
+<!-- Выбор шрифта (View → Font…): какие шрифты стоят в системе.
+     Список отдаёт server.py (GET /api/fonts) — fontconfig, а без него
+     он сам обходит шрифтовые папки. Выбор хранится как и тема. -->
+<div class="modal-overlay" id="fontOverlay" hidden>
+  <section class="window open-window font-window">
+    <div class="titlebar">
+      <div class="titleleft"><span class="appicon">F</span><span>Font</span></div>
+      <div class="window-controls"><span class="winbtn" data-close="fontOverlay">&times;</span></div>
+    </div>
+    <div class="open-body">
+      <label class="open-label" for="fontSearch">Find a font</label>
+      <div class="open-row">
+        <input class="open-input" id="fontSearch" type="text" spellcheck="false" autocomplete="off"
+               placeholder="Type to filter — or type any font name and press Enter">
+      </div>
+      <div class="open-hint">Current: <b data-font-current>Tahoma, Verdana, sans-serif</b></div>
+      <div class="font-list" data-font-list></div>
+      <div class="open-hint" data-font-source>Loading the list of system fonts…</div>
+      <div class="open-actions">
+        <button class="open-btn" type="button" data-font-default>Use default</button>
+        <button class="open-btn" type="button" data-close="fontOverlay">Close</button>
+      </div>
+    </div>
+  </section>
+</div>
+<!-- Конструктор раскладки (View → Layout constructor…): какие окна открыты,
+     где они стоят и какие карточки services показывать. Сохраняется на сервер. -->
+<div class="window layout-palette" id="layoutPalette" hidden>
+  <div class="titlebar" data-palette-drag>
+    <div class="titleleft"><span class="appicon">L</span><span>Layout constructor</span></div>
+    <div class="window-controls"><span class="winbtn" data-palette-close>&times;</span></div>
+  </div>
+  <div class="palette-body">
+    <div class="palette-group"><div class="palette-head">Windows</div><div data-palette-wins></div></div>
+    <div class="palette-group"><div class="palette-head">Available services</div><div data-palette-svc></div></div>
+    <div class="palette-actions">
+      <button type="button" data-palette-save>Save layout</button>
+      <button type="button" data-palette-reset>Reset layout</button>
+    </div>
+    <div class="palette-hint">Arrange the windows (drag, resize, open/close), tick the services
+      you need and press Save — the panel will open exactly like this everywhere.</div>
+  </div>
+</div>
+<input type="file" id="artFileInput" accept="image/*" hidden>
+<script src="app.js"></script>
+<!-- Плитки цветовых схем (текстом, не исполняются): инжектор ниже вставляет их скриптом только под скином WindowMaker -->
+<script type="text/plain" id="wm-widget">
+/* Переключатель цветовых схем WindowMaker: три плитки над часами в доке.
+   Клик ставит/снимает html[data-wmtheme] (серая схема — дефолт без
+   атрибута) и запоминает выбор в localStorage; ?wm=… задаёт схему
+   ссылкой. Сам виджет вставляется в панель загрузчиком перед </body>. */
+(function(){
+ var KEY='nerevar-hub.wmtheme',
+     NAMES={gray:'Default (NeXT gray)',steel:'SteelBlue',dark:'Dark'},
+     bar=document.querySelector('.taskbar');
+ if(!bar)return;
+ var clock=bar.querySelector('.clock'),
+     box=document.createElement('div');
+ box.className='wmpal';
+ ['gray','steel','dark'].forEach(function(id){
+  var b=document.createElement('button');
+  b.type='button';b.className='wmpal-chip wmpal-'+id;
+  b.setAttribute('data-wm',id);
+  b.title='Theme: '+NAMES[id];
+  b.addEventListener('click',function(){
+   if(id==='gray')document.documentElement.removeAttribute('data-wmtheme');
+   else document.documentElement.setAttribute('data-wmtheme',id);
+   try{localStorage.setItem(KEY,id);}catch(e){}
+   sync();
+  });
+  box.appendChild(b);
+ });
+ function sync(){
+  var cur=document.documentElement.getAttribute('data-wmtheme')||'gray';
+  Array.prototype.forEach.call(box.children,function(b){
+   b.classList.toggle('on',b.getAttribute('data-wm')===cur);});
+ }
+ if(clock)bar.insertBefore(box,clock);else bar.appendChild(box);
+ sync();
+})();
+</script>
+<script>
+/* Виджет схем — только когда скин WindowMaker включён */
+(function(){
+ var st=document.getElementById('openstep-skin'),
+     w=document.getElementById('wm-widget');
+ if(!st||st.getAttribute('media')!=='all'||!w)return;
+ var s=document.createElement('script');
+ s.textContent=w.textContent;
+ document.body.appendChild(s);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "_readme": "Иконки дока панели (вариант openstep.html, док справа). Ключи — все id окон панели, значение — путь к картинке от корня панели; пустая строка или отсутствующий ключ - на плитке буква. Клади картинки (png/gif/svg/ico/bmp/jpg/webp) в pics/dock/ и записывай путь с префиксом: pics/dock/server.png. Сервер отдаёт их как /pics/dock/..., в git попадает только README папки.",
+  "icons": {
+    "winServers": "pics/dock/peak.jpg",
+    "winMonitor": "pics/dock/peak.jpg",
+    "winMusic": "pics/dock/peak.jpg",
+    "winArt": "pics/dock/peak.jpg",
+    "winArt2": "pics/dock/peak.jpg",
+    "winArt3": "",
+    "winArt4": "",
+    "winArt5": "",
+    "winArt6": "",
+    "winTerm": "pics/dock/peak.jpg",
+    "winTerm2": "pics/dock/peak.jpg",
+    "winTerm3": "",
+    "winTerm4": "",
+    "winTerm5": "",
+    "winTerm6": "",
+    "winNetwork": "pics/dock/peak.jpg",
+    "winDownloads": "pics/dock/peak.jpg"
+  }
+}

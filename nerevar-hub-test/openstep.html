@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nerevar Hub — WindowMaker skin</title>
+<!--
+  ==========================================================================
+  OPENSTEP — старый адрес скина (перенаправление)
+  ==========================================================================
+
+  РАНЬШЕ
+  -------
+    Это был отдельный вход в панель: файл-загрузчик, который забирал
+    index.html и надевал на него свой <style> (скин NeXTSTEP /
+    WindowMaker / AfterStep: док справа, чёрные заголовки, цветовые
+    схемы).
+
+  СЕЙЧАС
+  -------
+    Скин живёт ВНУТРИ index.html — там же блок
+    <style id="openstep-skin" media="not all">, виджет цветовых схем
+    и переключатель:
+
+      View → WindowMaker skin      включить/выключить (запоминается),
+      index.html?skin=wm           включить ссылкой,
+      index.html?skin=wm&wm=steel  сразу со стальной схемой.
+
+    Поэтому отдельная страница больше не нужна: этот файл просто
+    перенаправляет на index.html?skin=wm, сохраняя остальные параметры
+    (?wm=steel и т.п.). Старые закладки и ссылки работают.
+
+  ЗАПУСК
+  ------
+    python3 server.py --port 80
+      -> http://<ip-сервера>/             обычная панель (Win9x)
+      -> http://<ip-сервера>/openstep.html та же панель, скин WindowMaker
+
+    Редирект работает и с диска (file://) — сам скин теперь встроен
+    в index.html и не требует fetch. Данные панели (метрики, api)
+    всё равно живут на сервере.
+-->
+<meta http-equiv="refresh" content="0; url=index.html?skin=wm">
+<script>
+ /* Сохраняем параметры: openstep.html?wm=steel -> index.html?skin=wm&wm=steel */
+ var extra=location.search?('&'+location.search.slice(1)):'';
+ location.replace('index.html?skin=wm'+extra);
+</script>
+</head>
+<body style="background:#131313;color:#e8e8e8;font:14px/1.6 sans-serif;padding:26px">
+<div style="max-width:660px">
+The WindowMaker skin now lives inside
+<a href="index.html?skin=wm" style="color:#6cb6ff">index.html</a>
+(toggle: View → WindowMaker skin). This page just forwards you there —
+if nothing happens, follow the link.
+</div>
+</body>
+</html>
