@@ -431,6 +431,12 @@ body{margin:0;font-family:var(--ui-font);font-size:13px;color:var(--text);backgr
 .scene{position:absolute;top:0;left:0;right:0;bottom:36px;overflow:hidden}
 .window{background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005}
 .appwindow{position:absolute;display:flex;flex-direction:column;min-width:260px;min-height:160px;background:var(--gray);border:2px solid;border-color:var(--light) var(--black) var(--black) var(--light);padding:3px;box-shadow:2px 2px 0 #0005;overflow:visible}
+/* контур, который летит в кнопку таскбара при сворачивании (и обратно):
+   пустой пунктирный прямоугольник, шагами — как в Win9x/XP */
+.min-outline{position:fixed;z-index:900;pointer-events:none;
+ border:2px dashed #000;box-shadow:0 0 0 1px #fff}
+/* окно, которое ждёт, пока контур долетит: видно, но клики не ловит */
+.appwindow.win-anim{pointer-events:none}
 .appwindow>.titlebar{cursor:move;flex:0 0 auto;touch-action:none;-webkit-user-select:none;user-select:none}
 .appwindow>.titlebar .window-controls{touch-action:none}
 .winbody{flex:1 1 auto;min-height:0;overflow:auto;border:2px inset var(--edge);background:var(--gray);padding:14px}
@@ -637,6 +643,8 @@ body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14
 .term-err{color:#ff6b6b}
 .term-ok{color:#3ff06a}
 .term-key{color:#6cb6ff}          /* подписи полей fetch — как в fastfetch */
+.term-img{display:block;max-width:100%;max-height:240px;width:auto;height:auto;
+ margin:4px 0;border:2px outset #555}
 /* визуализатор (команда viz): рамка-виджет и цветные полосы спектра */
 .term-viz{line-height:1.2}
 .viz-frame{color:#4a4a4a}

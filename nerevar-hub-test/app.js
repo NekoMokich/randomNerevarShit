@@ -1000,7 +1000,7 @@ function focusWindow(win){
 }
 function showWindow(win,show){
  win.hidden=!show;
- if(show){focusWindow(win);fitAscii();
+ if(show){delete win.dataset.minimized;focusWindow(win);fitAscii();
   if(win.dataset.autoplace==='1')placeMonitor();
   if(win.id==='winMusic')placeMusic();
   if(win.id==='winNetwork'||win.id==='winDownloads'||win.id==='winTelegram')placeExtra(win);
@@ -1090,13 +1090,83 @@ window.addEventListener('pointerup',endGesture);
 window.addEventListener('pointercancel',endGesture);
 window.addEventListener('blur',endGesture);
 
+/* --- свёртывание окна: контур шагами, как в Win9x/XP -------------------
+   Само окно не сжимается — оно исчезает сразу, а от его места к кнопке на
+   таскбаре прыгает пустой прямоугольный контур: отчётливыми шагами, как
+   при выключенном «показывать содержимое при перетаскивании». Шаг — 40 мс,
+   весь путь — 7 шагов (~0.28 с). Разворот — тем же контуром обратно, окно
+   проявляется в конце. Крестик закрывает мгновенно, при системном
+   «уменьшить движение» контура нет. */
+const MIN_STEPS=8;              // положений контура за путь, включая старт и финиш
+const MIN_STEP_MS=40;           // пауза между шагами, мс (весь путь ~0.28 с)
+const reduceMotion=()=>!!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+function rectOf(el){
+ const r=el.getBoundingClientRect();
+ return {left:r.left,top:r.top,width:r.width,height:r.height};
+}
+/* контур fixed и поверх всего: ему можно выезжать из сцены на таскбар */
+function animateOutline(from,to,done){
+ const box=document.createElement('div');
+ box.className='min-outline';
+ document.body.appendChild(box);
+ /* шаги равномерные: так каждый скачок контура отчётливо виден */
+ const place=e=>{
+  box.style.left=(from.left+(to.left-from.left)*e)+'px';
+  box.style.top=(from.top+(to.top-from.top)*e)+'px';
+  box.style.width=Math.max(4,from.width+(to.width-from.width)*e)+'px';
+  box.style.height=Math.max(4,from.height+(to.height-from.height)*e)+'px';
+ };
+ place(0);
+ let i=0;
+ const timer=setInterval(()=>{
+  i++;
+  const t=i/(MIN_STEPS-1);
+  place(Math.min(1,t));
+  if(t>=1){                      // последний шаг — уже кнопка таскбара
+   clearInterval(timer);
+   requestAnimationFrame(()=>{box.remove();if(done)done()});
+  }
+ },MIN_STEP_MS);
+}
+function minimizeWindow(win){
+ if(!win||win.hidden||win.dataset.animating==='1')return;
+ const btn=taskFor(win);
+ win.dataset.minimized='1';
+ if(!btn||reduceMotion()){showWindow(win,false);return}
+ const from=rectOf(win);
+ /* окно остаётся на месте, пока контур не долетит до кнопки: исчезает
+    только в самом конце (и на время пути не ловит клики) */
+ win.classList.add('win-anim');
+ win.dataset.animating='1';
+ animateOutline(from,rectOf(btn),()=>{
+  win.classList.remove('win-anim');
+  delete win.dataset.animating;
+  showWindow(win,false);
+ });
+}
+/* развернуть свёрнутое окно: контур вырастает из кнопки, потом окно */
+function restoreWindow(win){
+ if(!win||!win.hidden||win.dataset.animating==='1')return;
+ const wasMin=win.dataset.minimized==='1';
+ const btn=taskFor(win);
+ if(!wasMin||!btn||reduceMotion()){showWindow(win,true);return}
+ win.style.visibility='hidden';  // место занимаем, но пока не показываемся
+ showWindow(win,true);
+ const to=rectOf(win);
+ win.dataset.animating='1';
+ animateOutline(rectOf(btn),to,()=>{
+  win.style.visibility='';
+  delete win.dataset.animating;
+ });
+}
 document.querySelectorAll('[data-win-close]').forEach(el=>el.addEventListener('click',event=>{
  event.stopPropagation();
- const win=document.getElementById(el.dataset.winClose);if(win)showWindow(win,false);
+ const win=document.getElementById(el.dataset.winClose);
+ if(win){delete win.dataset.minimized;showWindow(win,false)}
 }));
 document.querySelectorAll('[data-win-min]').forEach(el=>el.addEventListener('click',event=>{
  event.stopPropagation();
- const win=document.getElementById(el.dataset.winMin);if(win)showWindow(win,false);
+ const win=document.getElementById(el.dataset.winMin);if(win)minimizeWindow(win);
 }));
 document.querySelectorAll('[data-win-max]').forEach(el=>el.addEventListener('click',event=>{
  event.stopPropagation();
@@ -1107,8 +1177,9 @@ document.querySelectorAll('[data-win-max]').forEach(el=>el.addEventListener('cli
 
 taskButtons.forEach(btn=>btn.addEventListener('click',()=>{
  const win=document.getElementById(btn.dataset.window);if(!win)return;
- if(win.hidden)showWindow(win,true);
- else if(btn.classList.contains('active'))showWindow(win,false);
+ if(win.dataset.animating==='1')return;
+ if(win.hidden)restoreWindow(win);
+ else if(btn.classList.contains('active'))minimizeWindow(win);
  else focusWindow(win);
 }));
 
@@ -3511,6 +3582,25 @@ function termPrintHtml(html,cls,style,out){
  termScroll(out);
  return div;
 }
+/* Показать картинку в консоли целиком: вывод подкручивается вниз ровно
+   настолько, чтобы она влезла (картинка выше окна — показываем её верх).
+   Вызывать после загрузки: до неё у <img> нулевая высота. */
+function termRevealImg(img,out){
+ out=out||termOut;
+ if(!out||!img)return;
+ const reveal=()=>{
+  const o=out.getBoundingClientRect(),r=img.getBoundingClientRect();
+  if(!o.height||!r.height)return;
+  if(r.height>o.height){
+   if(r.top<o.top)out.scrollTop-=(o.top-r.top);
+   return;
+  }
+  if(r.bottom>o.bottom)out.scrollTop+=(r.bottom-o.bottom);
+  else if(r.top<o.top)out.scrollTop-=(o.top-r.top);
+ };
+ if(img.complete&&img.naturalWidth)reveal();
+ else img.addEventListener('load',reveal,{once:true});
+}
 function termClear(out){out=out||termOut;if(out)out.innerHTML=''}
 function termEcho(line,out){ // строка «приглашение + команда», как в настоящей консоли
  termPrintHtml('<span class="term-ok">'+termEsc(termPromptText())+'</span> '+termEsc(line),
@@ -3802,7 +3892,12 @@ const TERM_MAN={
      'cancel live in the Download Manager window; finished',
      'files come back at /downloads/<name> as attachments.',
      'Only http and https; the size limit is',
-     'CONFIG.downloads.maxMB.']}
+     'CONFIG.downloads.maxMB.']},
+ batek:{n:'ask the house a question',s:'batek',
+  d:['Whatever you ask, the console answers with the same',
+     'thing, every time. One time in ten the answer is a',
+     'picture instead. It is not personal — that is just',
+     'how this terminal was raised.']}
 };
 /* --- команды ------------------------------------------------------------ */
 const TERM_CMDS={
@@ -3819,6 +3914,7 @@ const TERM_CMDS={
    'ls                       — pics/ music/ skins/ folders',
    'cowsay <text>            — a cow says your line',
    'fortune                  — a random quip',
+   'batek                    — ask the house a question',
    'cal [month] [year]       — calendar of that month',
    'df                       — disk usage table',
    'free                     — memory usage',
@@ -3995,6 +4091,18 @@ const TERM_CMDS={
    return;
   }
   termPrint(list[Math.floor(Math.random()*list.length)]);
+ },
+ /* batek — шутка для своих: на любой вопрос один и тот же ответ.
+    Аргументы не разбираем — ответ от них не зависит. */
+ batek(){
+  /* в 10% случаев вместо текста из консоли выпадает картинка */
+  if(Math.random()<0.1){
+   const line=termPrintHtml('<img class="term-img" src="pics/batek.jpg" alt="batek">');
+   const img=line&&line.querySelector('img');
+   if(img)termRevealImg(img);
+   return;
+  }
+  termPrint('аидитынахуй','term-err');
  },
  /* man — страница справки в классическом виде */
  man(args){
