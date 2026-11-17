@@ -50,6 +50,24 @@ Nerevar Hub — локальный сервер веб-панели + отдач
   GET /downloads/<имя> -> файл из downloads/; всегда с Content-Disposition:
                       attachment (скачанная страница не рендерится),
                       листинга каталога нет
+  ANY /tg/...      -> прокси Telegram Web для окна Telegram: официальный
+                      web.telegram.org отдаёт X-Frame-Options: deny (в iframe
+                      его не показать), поэтому панель встраивает прокси —
+                      браузер ходит на свой же origin, а сервер отдаёт
+                      контент web.telegram.org, выкинув запреты фреймирования
+                      (X-Frame-Options, CSP) и вернув редиректы с префиксом
+                      /tg/ (иначе страница ушла бы из-под прокси). Хост
+                      зафиксирован в коде — проксируется ТОЛЬКО
+                      web.telegram.org, путь его подменить не может;
+                      адрес меняется только переменной окружения
+                      TELEGRAM_UPSTREAM (нужно тестам и локальным зеркалам).
+                      Проксируются GET/HEAD/POST (MTProto ходит по HTTP,
+                      long-poll держит соединение — таймаут TELEGRAM_TIMEOUT,
+                      сек, по умолчанию 90), потолок POST — 16 МБ (413 выше);
+                      адреса апстрима перебираются с коротким срезом (5 с)
+                      на не-последнем — IPv6 на домашних сетях бывает мёртв,
+                      а getaddrinfo отдаёт его первым (см.
+                      _tg_create_connection)
   GET /favicon.ico -> 204 (чтобы в консоли браузера не было 404)
 
 Файл config.js (рядом с index.html) — все настройки панели: имя сервера,
@@ -120,6 +138,7 @@ wget качает файл по явной команде пользовател
 """
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -165,6 +184,99 @@ LAYOUT_LOCK = threading.Lock()   # писать могут несколько в
 BALANCE_PATH = os.path.join(BASE_DIR, "balance.json")
 BALANCE_MAX = 1024               # на банк уходит один крошечный JSON
 BALANCE_LOCK = threading.Lock()
+
+# Прокси Telegram Web (окно Telegram: /tg/... -> web.telegram.org).
+# Официальный сайт запрещает встраивание в iframe (X-Frame-Options: deny),
+# поэтому панель встраивает ПРОКСИ: браузер ходит на свой же origin — воркер
+# MTProto, шрифты и long-poll не требуют CORS — а сервер отдаёт контент
+# без запрета фреймирования. Хост зафиксирован здесь: путь запроса уходит
+# в него как есть и не может подменить адрес (см. _telegram_proxy).
+TG_UPSTREAM = os.environ.get("TELEGRAM_UPSTREAM",
+                             "https://web.telegram.org").rstrip("/")
+# long-poll MTProto держит соединение десятки секунд — таймаут щедрый;
+# ограничивает только промежуток между байтами, поток живёт столько, сколько
+# нужно (сервер многопоточный — параллельные запросы друг другу не мешают)
+TG_TIMEOUT = float(os.environ.get("TELEGRAM_TIMEOUT", "90"))
+# POST — куски MTProto; больше 16 МБ на один запрос панель не шлёт
+TG_POST_MAX = 16 * 1024 * 1024
+# заголовки, из-за которых страница либо не влезла бы в iframe панели
+# (XFO/CSP), либо сломали бы проксированную отдачу (длину считаем сами)
+TG_DROP_HEADERS = {"x-frame-options", "content-security-policy",
+                   "content-security-policy-report-only",
+                   "strict-transport-security", "alt-svc",
+                   "content-length", "connection", "keep-alive",
+                   "transfer-encoding"}
+# urllib сам следует редиректам — а их надо показать браузеру с префиксом
+# /tg/, иначе страница (и её относительные ссылки) выйдут из-под прокси
+class _TGNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# первому (обычно IPv6) адресу апстрима — короткий срез: getaddrinfo
+# отдаёт IPv6 первым, а на домашних сетях он бывает «чёрной дырой»
+# (нестабильный RA-адрес роутера) — python ждал бы весь таймаут на мёртвом
+# адресе, пока браузер и curl тем временем ушли на IPv4 (они гоняют
+# happy eyeballs). Не успел за 5 секунд — идём к следующему адресу;
+# последний и единственный адрес получают полный таймаут.
+TG_CONNECT_SLICE = 5.0
+
+
+def _tg_create_connection(address, timeout, source_address=None):
+    """socket.create_connection с коротким срезом для не-последнего адреса."""
+    host, port = address
+    infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    last_error = None
+    for index, (family, kind, proto, _canon, sockaddr) in enumerate(infos):
+        wait = timeout
+        if timeout is not None and index < len(infos) - 1:
+            wait = min(timeout, TG_CONNECT_SLICE)
+        sock = None
+        try:
+            sock = socket.socket(family, kind, proto)
+            if wait is not None:
+                sock.settimeout(wait)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sockaddr)
+        except OSError as exc:
+            last_error = exc
+            if sock is not None:
+                sock.close()
+            continue
+        return sock
+    raise last_error or OSError("no route to %s:%s" % (host, port))
+
+
+class _TGHTTPConnection(http.client.HTTPConnection):
+    """HTTPConnection с быстрым перебором адресов (см. _tg_create_connection)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _tg_create_connection
+
+
+class _TGHTTPSConnection(http.client.HTTPSConnection):
+    """То же для HTTPS: заменяется только TCP-соединение, SNI остаётся
+    на имени хоста — сертификат telegram так и проверяется."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _tg_create_connection
+
+
+class _TGHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_TGHTTPConnection, req)
+
+
+class _TGHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_TGHTTPSConnection, req)
+
+
+TG_OPENER = urllib.request.build_opener(_TGNoRedirect, _TGHTTPHandler,
+                                        _TGHTTPSHandler)
 
 # Загрузки Download Manager (окно и команда wget): файлы падают в папку
 # downloads/ рядом с сервером. Папка создаётся при первой загрузке,
@@ -1038,8 +1150,85 @@ def make_handler(index_path, metrics, allow_cors, pics_dir=None, music_dir=None,
             if not getattr(self, "_head_only", False):
                 self.wfile.write(data)
 
+        def _telegram_proxy(self, method):
+            """GET/HEAD/POST /tg/... -> TG_UPSTREAM/... (см. шапку файла)."""
+            raw_path, _, query = self.path.partition("?")
+            rest = raw_path[3:]                   # "/..." (у /tg — пусто)
+            if not rest.startswith("/"):
+                rest = "/" + rest
+            # хост берётся только из TG_UPSTREAM, rest — путь и queryString
+            upstream = TG_UPSTREAM + rest + ("?" + query if query else "")
+            headers = {}
+            for name in ("User-Agent", "Accept", "Accept-Language",
+                         "Content-Type", "Cookie", "Range",
+                         "If-None-Match", "If-Modified-Since"):
+                value = self.headers.get(name)
+                if value:
+                    headers[name] = value
+            body = None
+            if method == "POST":
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    length = 0
+                if length > TG_POST_MAX:
+                    self._send(413, "telegram payload too big",
+                               "text/plain; charset=utf-8")
+                    return
+                if length:
+                    body = self.rfile.read(length)
+            request = urllib.request.Request(upstream, data=body,
+                                             headers=headers, method=method)
+            try:
+                resp = TG_OPENER.open(request, timeout=TG_TIMEOUT)
+            except urllib.error.HTTPError as exc:
+                resp = exc                    # 3xx/206/4xx — это тоже ответ
+            except (urllib.error.URLError, OSError) as exc:
+                # апстрим недоступен (нет сети/DNS) — аккуратная страница
+                # вместо пустого iframe
+                self._send(502, "telegram upstream is unreachable: %s" % exc,
+                           "text/html; charset=utf-8",
+                           {"Cache-Control": "no-store"})
+                return
+            try:
+                payload = b"" if method == "HEAD" else resp.read()
+                code = (getattr(resp, "status", None)
+                        or getattr(resp, "code", None) or resp.getcode())
+                hdrs = getattr(resp, "headers", None) or resp.hdrs
+                items = list(hdrs.items())
+            finally:
+                resp.close()
+
+            def rewrite(location):
+                # редирект ведём обратно в прокси, чужой хост — наружу
+                absolute = urllib.parse.urljoin(upstream, location)
+                parts = urllib.parse.urlsplit(absolute)
+                host = urllib.parse.urlsplit(TG_UPSTREAM).hostname
+                if parts.hostname == host:
+                    return "/tg" + (parts.path or "/") + (
+                        "?" + parts.query if parts.query else "")
+                return absolute
+
+            extra = {}
+            content_type = "application/octet-stream"
+            for name, value in items:
+                low = name.lower()
+                if low in TG_DROP_HEADERS:
+                    continue
+                if low == "location":
+                    value = rewrite(value)
+                elif low == "content-type":
+                    content_type = value
+                    continue
+                # повторяющиеся заголовки (несколько Set-Cookie) схлопываются
+                extra[name] = value
+            self._send(code, payload, content_type, extra)
+
         def do_GET(self):
             path = self.path.split("?", 1)[0]
+            if path == "/tg" or path.startswith("/tg/"):
+                self._telegram_proxy("GET")
+                return
             if path in ("/", "/index.html"):
                 try:
                     with open(index_path, "rb") as fh:
@@ -1186,6 +1375,9 @@ def make_handler(index_path, metrics, allow_cors, pics_dir=None, music_dir=None,
         # --- сохранение: раскладка окон и банк в блэкджеке ------------- #
         def do_POST(self):
             path = self.path.split("?", 1)[0]
+            if path == "/tg" or path.startswith("/tg/"):
+                self._telegram_proxy("POST")
+                return
             if path in ("/api/downloads", "/api/downloads/control"):
                 self._post_downloads(path)
                 return

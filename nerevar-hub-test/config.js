@@ -25,13 +25,16 @@
                            или '~.png' / '~.gif' / '~' — случайная
       11. artIcon        — иконка окна арта
       12. numberStyle    — 'title' | 'big' — размер цифр-иконок сервисов
-      13. services[]     — сервисы: name, port, note, icon, win, live
+      13. services[]     — сервисы: name, port, note, icon, win, live, ext
                            если icon пустой/отсутствует — покажется номер;
-                           win — id окна (winNetwork / winDownloads):
-                           клик по имени карточки открывает это окно;
+                           win — id окна (winNetwork / winDownloads /
+                           winTelegram): клик по имени карточки открывает
+                           это окно;
                            live — ключ живого статуса ('network',
                            'downloads'): карточка показывает то, что видит
-                           окно — скорость трафика и активные загрузки
+                           окно — скорость трафика и активные загрузки;
+                           ext — внешний сервис (Telegram): карточка без
+                           порта и LAN/Tailscale-ссылок
       14. monitor        — System Monitor: endpoint /api/stats, период
                            опроса, размер окна и exclude — какие точки
                            монтирования НЕ показывать в разделе Storage
@@ -106,6 +109,13 @@
       24. downloads      — окно Download Manager (загрузка файлов):
                            endpoint /api/downloads, период опроса, maxMB —
                            лимит одной загрузки в МБ (0 — без лимита),
+                           startOpen и желаемый размер окна
+      25. telegram       — окно-фрейм веб-инстанса Telegram (File →
+                           Telegram): url — адрес инстанса, по умолчанию
+                           '/tg/k/' (прокси server.py за официальным
+                           web.telegram.org — тот запрещает встраивание
+                           напрямую); чужой сайт открывается кнопкой
+                           внизу окна, enabled, windowTitle, icon,
                            startOpen и желаемый размер окна
 
   ========================================================================== */
@@ -258,6 +268,21 @@ window.CONFIG={
   width:440,
   height:300
  },
+ // --- Telegram (окно-фрейм веб-инстанса мессенджера) -----------------------
+ telegram:{
+  enabled:true,          // false — окна, кнопки и карточки не будет
+  windowTitle:'Telegram',
+  icon:'✈',
+  url:'/tg/k/',             // веб-инстанс: '/tg/k/' — встроенный прокси
+                            // server.py (за ним официальный
+                            // web.telegram.org — он сам запрещает
+                            // встраивание, а прокси отдаёт страницу без
+                            // X-Frame-Options); можно полный адрес
+                            // своего инстанса, разрешающего фрейм
+  startOpen:false,       // открывать окно при загрузке страницы
+  width:520,             // желаемый размер окна (встанет в свободное
+  height:620             // место, как у Network)
+ },
  // --- Терминал (окно-пародия на консоль) ----------------------------------
  term:{
   enabled:true,          // false — окна и кнопки в таскбаре не будет
@@ -344,12 +369,15 @@ window.CONFIG={
   {name:'Placeholder 04',port:'8004',note:'Demo endpoint'},
   {name:'Placeholder 05',port:'8005',note:'Demo endpoint'},
   {name:'Placeholder 06',port:'8006',note:'Demo endpoint'},
-  // Две живые карточки под окна Network и Download Manager: win — id окна,
+  // Карточки под окна Network, Download Manager и Telegram: win — id окна,
   // клик по имени карточки открывает его; live — ключ живого статуса,
   // app.js пишет в [data-live=…] то, что видит окно (скорость трафика,
-  // число активных загрузок). Пока опрос не пришёл — прочерк.
+  // число активных загрузок) — у Telegram live нет; ext — внешний сервис
+  // (Telegram): карточка без порта и LAN/Tailscale-ссылок. Пока опрос не
+  // пришёл — прочерк.
   {name:'Network',port:'80',note:'Traffic & open ports',icon:'🌐',win:'winNetwork',live:'network'},
-  {name:'Download Manager',port:'80',note:'Files fetched by the panel',icon:'💾',win:'winDownloads',live:'downloads'}
+  {name:'Download Manager',port:'80',note:'Files fetched by the panel',icon:'💾',win:'winDownloads',live:'downloads'},
+  {name:'Telegram',port:'443',note:'Web messenger instance',icon:'✈',win:'winTelegram',ext:true}
  ],
  help:{
   windowTitle:'Help',
@@ -373,6 +401,7 @@ window.CONFIG={
    'The panel has two looks: the classic light one and a <b>dark</b> one (teal desktop, near-black window bodies, dark-blue title bars, light-blue headings, white text, blue and orange gauges &mdash; the way it appears with the Dark Reader extension on). Set <code>CONFIG.theme = &quot;dark&quot;</code> in <code>config.js</code>, or press <b>Dark theme</b> in the <b>View</b> menu to switch at once: the button remembers the choice in this browser and travels with the layout on the server, so every device opens in the same theme. <b>Reset window layout</b> forgets the choice and returns the theme set in <code>config.js</code>.',
    'The whole interface is set in the font from <code>CONFIG.font</code> in <code>config.js</code> &mdash; a family installed on the machine, or a full CSS stack such as <code>&quot;Noto Sans, DejaVu Sans, sans-serif&quot;</code> (an empty value keeps the default). <b>View &rarr; Font&hellip;</b> lists every font that is actually installed: server.py collects them from the system (fontconfig &mdash; <code>fc-list</code> &mdash; or, without that utility, by reading the font folders itself), each name is drawn in its own face so you see it before choosing, and the search box filters the list &mdash; type a name that is not on the list and press Enter to use it anyway. The choice is remembered like the theme and travels with the layout; <b>Reset window layout</b> returns to <code>CONFIG.font</code>. The ASCII art window and the player keep their own monospace fonts.',
    'The <b>Network</b> window (<b>File &rarr; Network</b>) reads /proc/net/dev and /proc/net/tcp on the server (GET /api/network): live RX/TX rates, a rolling traffic graph of the last minute and the table of listening sockets; interfaces listed in <code>CONFIG.network.ignore</code> (loopback by default) keep their own polling traffic out of the graph, and <code>ss</code> in the Terminal prints the same ports. The <b>Download Manager</b> window (<b>File &rarr; Download Manager</b>) fetches http/https URLs into the <code>downloads/</code> folder on the server (POST /api/downloads): a Win9x progress bar, speed and ETA per file, cancel and remove; <code>wget &lt;url&gt;</code> does the same from the Terminal. Finished files come back at <code>/downloads/&lt;name&gt;</code> as attachments, never rendered next to the panel; the size limit is <code>CONFIG.downloads.maxMB</code>.',
+   'The <b>Telegram</b> window (<b>File &rarr; Telegram</b>) frames a web instance of the messenger &mdash; <code>CONFIG.telegram.url</code>, default <code>/tg/k/</code>: a proxy inside server.py, because the official web.telegram.org refuses embedding (X-Frame-Options: deny). The proxy serves only web.telegram.org, strips the framing ban and rewires redirects under /tg/; point the URL at your own instance if it allows framing, and use <b>Open in browser</b> for sites that never do. The frame loads once, on the first open; the card in Available services carries no LAN/Tailscale links &mdash; Telegram is an external service.',
    'The taskbar <b>clock</b> is two lines: the time on top, the date <code>Mo/Nov/2/2026</code> under it (two-letter weekday, three-letter month). Both are visible at every screen width. Click it to open a calendar &mdash; month view, <b>Today</b> button, closes on Esc or a click anywhere else.'
   ]
  }

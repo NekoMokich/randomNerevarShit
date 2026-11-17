@@ -46,7 +46,8 @@ let hiddenSvc=new Set();
    показывается: выключенные не рендерятся и не считаются в статусбаре. */
 function svcOff(svc){
  if(!svc.win)return false;
- const key=({winNetwork:'network',winDownloads:'downloads',winMusic:'music'})[svc.win];
+ const key=({winNetwork:'network',winDownloads:'downloads',winMusic:'music',
+             winTelegram:'telegram'})[svc.win];
  return key?((CONFIG[key]||{}).enabled===false):false;
 }
 
@@ -58,15 +59,19 @@ function renderServices(){
   const isNumber=(svc.icon==null||svc.icon==='');
   const icon=isNumber?(i+1):svc.icon;            // номер берём из CONFIG, без пересчёта
   const iconCls=isNumber?'iconbox is-number':'iconbox';
-  const port=`<span class="svc-port">${svc.port}</span>`;
-  const note=svc.note?`${svc.note} · ${port}`:port;
+  /* ext — внешний сервис (Telegram): без порта и LAN/Tailscale-ссылок,
+     у него нет своего адреса на этом сервере */
+  const isExt=!!svc.ext;
+  const port=isExt?'':`<span class="svc-port">${svc.port}</span>`;
+  const note=svc.note?(isExt?svc.note:`${svc.note} · ${port}`):(isExt?'':port);
   /* win — клик по имени открывает окно сервиса; live — ячейка живого
      статуса, её обновляют netTick (Network) и dlTick (Download Manager) */
   const name=svc.win
    ?`<h2><a class="svc-open" data-open-win="${svc.win}" href="#" title="Open window">${svc.name}</a></h2>`
    :`<h2>${svc.name}</h2>`;
   const live=svc.live?`<div class="svc-live" data-live="${svc.live}">&mdash;</div>`:'';
-  return `<article class="service"><div class="${iconCls}">${icon}</div><div>${name}<p>${note}</p><div class="actions"><a data-host="lan" data-port="${svc.port}" href="#">LAN</a><a data-host="tail" data-port="${svc.port}" href="#">Tailscale</a></div>${live}</div></article>`;
+  const actions=isExt?'':`<div class="actions"><a data-host="lan" data-port="${svc.port}" href="#">LAN</a><a data-host="tail" data-port="${svc.port}" href="#">Tailscale</a></div>`;
+  return `<article class="service"><div class="${iconCls}">${icon}</div><div>${name}<p>${note}</p>${actions}${live}</div></article>`;
  }).join('');
  updateLinks();                               // новые ссылки сразу получают адреса
  const counter=document.querySelector('.statusbar div:nth-child(2)');
@@ -345,6 +350,17 @@ function applyConfig(){
  if(dlWin)dlWin.hidden=dls.enabled===false||dls.startOpen!==true;
  if(dlBtn)dlBtn.hidden=dls.enabled===false;
  if(dlMenu)dlMenu.hidden=dls.enabled===false;
+ /* Telegram: окно-фрейм веб-инстанса — заголовок, иконка, включение
+    и стартовое состояние, как у Network/Download Manager */
+ const tg=CONFIG.telegram||{};
+ document.querySelectorAll('[data-telegram-title]').forEach(el=>{el.textContent=tg.windowTitle||'Telegram'});
+ document.querySelectorAll('[data-telegram-icon]').forEach(el=>{el.textContent=tg.icon||'✈'});
+ const tgWin=document.getElementById('winTelegram');
+ const tgBtn=document.querySelector('.task[data-window="winTelegram"]');
+ const tgMenu=document.querySelector('.menu button[data-action="telegram"]');
+ if(tgWin)tgWin.hidden=tg.enabled===false||tg.startOpen!==true;
+ if(tgBtn)tgBtn.hidden=tg.enabled===false;
+ if(tgMenu)tgMenu.hidden=tg.enabled===false;
  /* терминалы: сколько их — CONFIG.term.count (окна клонируются до
     вызова applyConfig — см. cloneTermWindows ниже); заголовок у каждого
     свой:
@@ -900,6 +916,7 @@ function runAction(action){
   case 'terminal':showWindow(document.getElementById('winTerm'),true);break;
   case 'network':showWindow(document.getElementById('winNetwork'),true);break;
   case 'downloads':showWindow(document.getElementById('winDownloads'),true);break;
+  case 'telegram':case 'tg':showWindow(document.getElementById('winTelegram'),true);break;
   case 'zoom-in':{const v=currentViewer();if(v)setZoom(v.zoom*1.15);break;}
   case 'zoom-out':{const v=currentViewer();if(v)setZoom(v.zoom/1.15);break;}
   case 'zoom-reset':setZoom(1);break;
@@ -986,7 +1003,7 @@ function showWindow(win,show){
  if(show){focusWindow(win);fitAscii();
   if(win.dataset.autoplace==='1')placeMonitor();
   if(win.id==='winMusic')placeMusic();
-  if(win.id==='winNetwork'||win.id==='winDownloads')placeExtra(win);
+  if(win.id==='winNetwork'||win.id==='winDownloads'||win.id==='winTelegram')placeExtra(win);
   if(isTermWin(win)){
    const t=termByWin(win);
    placeTerm(win);
@@ -1649,13 +1666,36 @@ function placeMusic(){
  musicWin.style.left=Math.round(Math.max(m,(sw-w)/2))+'px';
  musicWin.style.top=Math.round(Math.max(m,(sh-h)/2))+'px';
 }
-/* Network и Download Manager: встают в свободное место — сеточный поиск
-   минимального перекрытия, как у терминалов; однократно (dataset.placed),
-   дальше координаты их собственные, ручное перетаскивание уважаем. */
+/* Telegram: фрейм грузится один раз — при первом показе окна (закрытое
+   окно чужой сайт не тянет; адрес — CONFIG.telegram.url). Кнопка внизу
+   окна открывает тот же адрес во вкладке браузера — официальный
+   web.telegram.org запрещает встраивание (X-Frame-Options: deny). */
+function tgLoad(){
+ const win=document.getElementById('winTelegram');
+ if(!win||win.hidden)return;
+ const frame=win.querySelector('[data-tg-frame]');
+ if(!frame||frame.dataset.loaded==='1')return;
+ frame.dataset.loaded='1';
+ frame.src=String((CONFIG.telegram||{}).url||'/tg/');
+}
+(function tgOpenHook(){
+ const btn=document.querySelector('.tg-open');
+ if(!btn)return;
+ btn.addEventListener('click',()=>{
+  const url=String((CONFIG.telegram||{}).url||'/tg/');
+  window.open(url,'_blank','noopener');
+ });
+})();
+/* Network, Telegram и Download Manager: встают в свободное место —
+   сеточный поиск минимального перекрытия, как у терминалов; однократно
+   (dataset.placed), дальше координаты их собственные, ручное
+   перетаскивание уважаем. */
 function placeExtra(win){
  if(!win||win.hidden||win.dataset.maximized==='1')return;
+ if(win.id==='winTelegram')tgLoad();      // фрейм — при первом показе
  if(win.dataset.manual==='1'){clampWindow(win);return}
- const cfg=win.id==='winNetwork'?(CONFIG.network||{}):(CONFIG.downloads||{});
+ const cfg=({winNetwork:CONFIG.network,winTelegram:CONFIG.telegram,
+             winDownloads:CONFIG.downloads})[win.id]||{};
  const sw=scene.clientWidth,sh=scene.clientHeight,m=10;
  if(win.dataset.placed!=='1'){
   win.dataset.placed='1';
@@ -2715,6 +2755,7 @@ function layoutWindows(force){
     placeTerm();      // и терминал, если его в раскладке ещё не было
     placeExtra(document.getElementById('winNetwork'));
     placeExtra(document.getElementById('winDownloads'));
+    placeExtra(document.getElementById('winTelegram'));
     return;
   }
   const sw=scene.clientWidth,sh=scene.clientHeight,m=10;
@@ -2743,6 +2784,7 @@ function layoutWindows(force){
     placeMusic();
     placeExtra(document.getElementById('winNetwork'));
     placeExtra(document.getElementById('winDownloads'));
+    placeExtra(document.getElementById('winTelegram'));
   }
 }
 
@@ -2858,6 +2900,7 @@ function applySavedLayout(data){
                         (w.id==='winMonitor'&&(CONFIG.monitor||{}).enabled===false)||
                         (w.id==='winNetwork'&&(CONFIG.network||{}).enabled===false)||
                         (w.id==='winDownloads'&&(CONFIG.downloads||{}).enabled===false)||
+                        (w.id==='winTelegram'&&(CONFIG.telegram||{}).enabled===false)||
                         (isTermWin(w)&&termCfg().enabled===false);
       const wantOpen=!offByConfig&&!!rec.open;
       w.hidden=!wantOpen;
@@ -3005,12 +3048,14 @@ function resetLayout(){
                         (w.id==='winMonitor'&&(CONFIG.monitor||{}).enabled===false)||
                         (w.id==='winNetwork'&&(CONFIG.network||{}).enabled===false)||
                         (w.id==='winDownloads'&&(CONFIG.downloads||{}).enabled===false)||
+                        (w.id==='winTelegram'&&(CONFIG.telegram||{}).enabled===false)||
                         (isTermWin(w)&&termCfg().enabled===false);
       let wantOpen=!offByConfig;
       if(w.id==='winMusic')wantOpen=wantOpen&&!!musicCfg().startOpen;
       if(isTermWin(w))wantOpen=wantOpen&&termCfg().startOpen!==false;   // все консоли сразу
       if(w.id==='winNetwork')wantOpen=wantOpen&&!!(CONFIG.network||{}).startOpen;
       if(w.id==='winDownloads')wantOpen=wantOpen&&!!(CONFIG.downloads||{}).startOpen;
+      if(w.id==='winTelegram')wantOpen=wantOpen&&!!(CONFIG.telegram||{}).startOpen;
       w.hidden=!wantOpen;
       if(!wantOpen){const btn=taskFor(w);if(btn)btn.classList.remove('active');}
       /* терминал ставится ПОСЛЕ монитора, поэтому его старая геометрия
@@ -3392,7 +3437,7 @@ let BJ=BJ0,SL=SL0;                    // партии текущего конт�
 
 /* имена для команды open: обычные окна + свои ключи каждого терминала */
 function openWinKeys(){
- const keys=['server','viewer','monitor','music','help','network','downloads'];
+ const keys=['server','viewer','monitor','music','help','network','downloads','telegram'];
  TERMS.forEach((t,i)=>keys.push(i?'term'+(i+1):'term'));
  return keys;
 }
@@ -3786,7 +3831,7 @@ const TERM_CMDS={
    'wget <url>               — download a file to downloads/',
    'theme dark|light         — switch the panel theme',
    'open <window>            — open a window: server, viewer, monitor,',
-   '                          music, help, '+openWinKeys().slice(4).join(', ')+' (each its own console)',
+   '                          music, '+openWinKeys().slice(4).join(', ')+' (each its own console)',
    'about                    — what this panel is',
    'exit                     — close this window',
    'sudo <command>           — nice try'].forEach(l=>termPrint('  '+l));
@@ -4095,7 +4140,8 @@ const TERM_CMDS={
   const map={server:'winServers',servers:'winServers',viewer:'winArt',viewers:'winArt',
              picture:'winArt',monitor:'winMonitor',music:'winMusic',audio:'winMusic',
              network:'winNetwork',net:'winNetwork',
-             downloads:'winDownloads',download:'winDownloads',dl:'winDownloads'};
+             downloads:'winDownloads',download:'winDownloads',dl:'winDownloads',
+             telegram:'winTelegram',tg:'winTelegram'};
   /* у каждого терминала свой ключ: term, term2, term3… (сколько их — count) */
   TERMS.forEach((t,i)=>{const n=i+1;map['term'+n]=t.id;map['terminal'+n]=t.id});
   if(TERMS.length){map.term=TERMS[0].id;map.terminal=TERMS[0].id}
@@ -4927,6 +4973,7 @@ function placeTerm(win){
       placeTerm();     // и терминал, если его в раскладке ещё не было
       placeExtra(document.getElementById('winNetwork'));
       placeExtra(document.getElementById('winDownloads'));
+      placeExtra(document.getElementById('winTelegram'));
     }
   }
   layoutReady=true;                 // дальше изменения можно сохранять

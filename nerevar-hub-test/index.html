@@ -218,6 +218,23 @@
     имя файла и итог; ss — слушающие порты. Карточка Download Manager
     в Available services показывает число активных загрузок.
 
+  TELEGRAM (CONFIG.telegram)
+  --------------------------
+    Окно Telegram (File → Telegram) — веб-клиент мессенджера в iframe.
+    По умолчанию url:'/tg/k/' — прокси server.py: официальный
+    web.telegram.org сам запрещает встраивание (X-Frame-Options: deny),
+    поэтому панель встраивает свой прокси — страница, её MTProto-воркер
+    и шрифты живут в одном origin панели, CORS не нужен. Проксируется
+    только web.telegram.org (хост зафиксирован в server.py, меняется
+    только переменной TELEGRAM_UPSTREAM), редиректы он возвращает с
+    префиксом /tg/. url может указывать и на свой веб-инстанс, который
+    разрешает фрейм; для чужих сайтов внизу окна кнопка Open in
+    browser (запрет встраивания обходится открытой вкладкой).
+    Фрейм грузится один раз — при первом открытии окна (закрытое окно
+    чужой сайт не тянет). Заголовок, иконка, включение (enabled) и
+    стартовое состояние — как у Network; карточка Telegram в Available
+    services — внешний сервис (ext): без порта и LAN/Tailscale-ссылок.
+
   ОКНА
   ----
     Перетаскивание — за заголовок, изменение размера — за уголок справа
@@ -354,7 +371,7 @@
         wget <url>          — скачать файл в downloads/ (http/https)
         theme dark|light    — переключить тему панели
         open <окно>         — открыть окно: server, viewer, monitor,
-                              music, help, network, downloads,
+                              music, help, network, downloads, telegram,
                               term, term2… (сколько их — CONFIG.term.count)
         about               — имя и версия панели
         exit                — закрыть окно терминала
@@ -420,11 +437,13 @@ body{margin:0;font-family:var(--ui-font);font-size:13px;color:var(--text);backgr
 .art-body{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;overflow:hidden;padding:10px}
 .resize-grip{position:absolute;right:1px;bottom:1px;width:16px;height:16px;cursor:nwse-resize;touch-action:none;z-index:10;background-image:linear-gradient(135deg,transparent 0 40%,var(--dark) 40% 48%,transparent 48% 58%,var(--dark) 58% 66%,transparent 66% 76%,var(--dark) 76% 84%,transparent 84%);user-select:none}
 .taskbar{position:absolute;left:0;right:0;bottom:0;height:36px;display:flex;align-items:center;gap:6px;padding:4px 6px;background:var(--gray);border-top:2px solid var(--light);z-index:500}
-.task{display:flex;align-items:center;gap:7px;min-width:150px;max-width:210px;text-align:left;background:var(--gray);border:2px outset var(--edge);padding:5px 9px;font:12px var(--ui-font);color:var(--text);cursor:default;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.task{display:flex;align-items:center;gap:7px;min-width:64px;max-width:210px;text-align:left;background:var(--gray);border:2px outset var(--edge);padding:5px 9px;font:12px var(--ui-font);color:var(--text);cursor:default;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .task.active{border-style:inset;background:var(--active);font-weight:bold}
 .task .ticon{width:16px;height:16px;background:var(--gray);border:1px solid var(--dark);display:grid;place-items:center;font:bold 10px var(--ui-font);color:var(--heading);flex:0 0 auto}
+/* подпись ужимается первой, кнопка не исчезает — как в настоящем Win9x */
+.task .tlabel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .taskbar .spacer{flex:1}
-.taskbar .clock{border:2px inset var(--edge);padding:1px 9px;font:11px var(--ui-font);color:var(--dim);text-align:center;cursor:default;-webkit-user-select:none;user-select:none;display:flex;flex-direction:column;gap:0;align-items:center;justify-content:center;white-space:nowrap;line-height:1.12}
+.taskbar .clock{border:2px inset var(--edge);padding:1px 9px;font:11px var(--ui-font);color:var(--dim);text-align:center;cursor:default;-webkit-user-select:none;user-select:none;display:flex;flex-direction:column;gap:0;align-items:center;justify-content:center;white-space:nowrap;line-height:1.12;flex:0 0 auto}
 /* время — сверху, крупнее и темнее; дата — под ним, чуть мельче */
 .taskbar .clock .ctime{color:var(--text);font-size:11px}
 .taskbar .clock .cdate{color:var(--dim);font-size:10px}
@@ -715,6 +734,16 @@ body.number-style-big .iconbox.is-number{font-size:19px}.service h2{font-size:14
 .svc-open{color:var(--heading);text-decoration:underline;cursor:pointer}
 .svc-open:hover{color:var(--text)}
 .svc-live{margin-top:4px;font:11px "Lucida Console",Consolas,monospace;color:var(--dim)}
+/* --- Telegram: окно-фрейм веб-инстанса --------------------------------- */
+.tg-body{padding:0;overflow:hidden;display:flex;flex-direction:column}
+.tg-frame{flex:1 1 auto;min-height:0;width:100%;border:0;background:#fff}
+.tg-bar{flex:0 0 auto;display:flex;align-items:center;gap:8px;
+        padding:4px 6px;background:var(--gray);border-top:2px solid var(--light)}
+.tg-note{flex:1;min-width:0;font-size:11px;color:var(--dim);
+         overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tg-open{background:var(--gray);border:2px outset var(--edge);padding:3px 10px;
+         font:11px var(--ui-font);color:var(--text);cursor:default;white-space:nowrap}
+.tg-open:active{border-style:inset}
 html[data-theme=dark]{
  --desktop:#147a74;      /* рабочий стол */
  --gray:#262626;         /* тело окна, таскбар, пункты меню */
@@ -1039,6 +1068,7 @@ html[data-wmtheme=dark] .music-seek-fill{background:#3a6fd8}
           <button data-action="terminal">Terminal</button>
           <button data-action="network">Network</button>
           <button data-action="downloads">Download Manager</button>
+          <button data-action="telegram">Telegram</button>
           <div class="sep"></div>
           <button data-action="exit">Exit</button>
         </div>
@@ -1203,6 +1233,18 @@ html[data-wmtheme=dark] .music-seek-fill{background:#3a6fd8}
     </div>
     <div class="resize-grip" data-resize></div>
   </section>
+
+  <!-- Telegram: окно-фрейм веб-инстанса; src ставит app.js (tgLoad) при
+       первом открытии — закрытое окно чужой сайт не тянет -->
+  <section class="appwindow" id="winTelegram" hidden>
+    <div class="titlebar" data-drag><div class="titleleft"><span class="appicon" data-telegram-icon>✈</span><span data-telegram-title>Telegram</span></div><div class="window-controls"><span class="winbtn" data-win-min="winTelegram">_</span><span class="winbtn" data-win-max="winTelegram">□</span><span class="winbtn" data-win-close="winTelegram">×</span></div></div>
+    <div class="winbody tg-body">
+      <iframe class="tg-frame" data-tg-frame title="Telegram web instance"
+              referrerpolicy="no-referrer"></iframe>
+      <div class="tg-bar"><span class="tg-note">Frame empty? The site forbids embedding — open it in a tab or set CONFIG.telegram.url (default: /tg/ proxy).</span><button class="tg-open" type="button">Open in browser</button></div>
+    </div>
+    <div class="resize-grip" data-resize></div>
+  </section>
 </div>
 <audio id="musicAudio" preload="metadata"></audio>
 <div class="taskbar" id="taskbar">
@@ -1214,6 +1256,7 @@ html[data-wmtheme=dark] .music-seek-fill{background:#3a6fd8}
   <button class="task" data-window="winTerm2"><span class="ticon" data-term-icon>&gt;</span><span class="tlabel" data-term-title>Terminal 2</span></button>
   <button class="task" data-window="winNetwork"><span class="ticon" data-network-icon>N</span><span class="tlabel" data-network-title>Network</span></button>
   <button class="task" data-window="winDownloads"><span class="ticon" data-downloads-icon>D</span><span class="tlabel" data-downloads-title>Download Manager</span></button>
+  <button class="task" data-window="winTelegram"><span class="ticon" data-telegram-icon>✈</span><span class="tlabel" data-telegram-title>Telegram</span></button>
   <span class="spacer"></span>
   <div class="clock" id="clock"><span class="ctime" data-clock-time>--:--</span><span class="cdate" data-clock-date>--</span></div>
 </div>

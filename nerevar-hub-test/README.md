@@ -10,9 +10,9 @@
 | `index.html` | панель: разметка и стили (дизайн) — поведение в `app.js`, настройки в `config.js` |
 | `openstep.html` | старый адрес скина WindowMaker: перенаправляет на `index.html?skin=wm` — сам скин живёт в `index.html` (см. «Альтернативный скин») |
 | `dock.json` | иконки дока скина WindowMaker: JSON-карта id окна → картинка, читает `app.js` (см. «Иконки дока») |
-| `app.js` | логика панели: окна и меню, System Monitor, Network, Download Manager, аудио-плеер, Picture Viewer, Help, конструктор раскладки, терминал (команды, fetch, блэкджек) |
-| `config.js` | **все настройки** панели: имя сервера, адреса, сервисы, System Monitor (включая скрываемые точки монтирования), сеть, загрузчик, аудио-плеер, скины, темы оформления (Win9x и схемы WindowMaker), запоминание раскладки, Help |
-| `server.py` | сервер: раздаёт панель, метрики, картинки, музыку, скины, раскладку, трафик/порты и загрузку файлов |
+| `app.js` | логика панели: окна и меню, System Monitor, Network, Download Manager, Telegram, аудио-плеер, Picture Viewer, Help, конструктор раскладки, терминал (команды, fetch, блэкджек) |
+| `config.js` | **все настройки** панели: имя сервера, адреса, сервисы, System Monitor (включая скрываемые точки монтирования), сеть, загрузчик, Telegram-фрейм, аудио-плеер, скины, темы оформления (Win9x и схемы WindowMaker), запоминание раскладки, Help |
+| `server.py` | сервер: раздаёт панель, метрики, картинки, музыку, скины, раскладку, трафик/порты, загрузку файлов и прокси Telegram (`/tg/…`) |
 | `pics/` | содержимое Picture Viewer: картинки **и** ascii-арт (`.txt`) — отдаётся по `/pics/<имя>` |
 | `music/` | треки аудио-плеера — отдаются по `/music/<имя>`, список `/api/music`; **сами файлы в git не кладутся** |
 | `skins/` | скины плеера `.wsz` / `.zip` (Winamp 2 / Qmmp) — `/skins/<имя>`, список `/api/skins`; **сами файлы в git не кладутся** |
@@ -221,6 +221,7 @@ journalctl -u nerevar-hub -f      # логи
 | `/api/downloads` | список загрузок Download Manager: `GET` — `{"dir":"downloads","jobs":[{id,url,name,got,total,status,error,started}]}`; `POST` `{"url":"http://…"}` — начать (только http/https) → `{"id":N,"name","dir"}` |
 | `/api/downloads/control` | `POST` `{"id":N,"action":"cancel"\|"remove"}` — остановить рабочую загрузку или убрать строку списка |
 | `/downloads/<имя>` | скачанный файл из `downloads/`; **всегда** с `Content-Disposition: attachment`, листинга каталога нет |
+| `/tg/…` | прокси Telegram Web для окна Telegram: GET/HEAD/POST → только `web.telegram.org`, без `X-Frame-Options`/CSP, редиректы возвращаются с префиксом `/tg/` (см. «Telegram») |
 | `/favicon.ico` | 204, пустое тело |
 | всё остальное | 404 |
 
@@ -270,11 +271,12 @@ monitor:{
 показывается как приглашение с командой и выполняется. Подробнее —
 раздел «Терминал» ниже.
 
-Окна **Network** и **Download Manager** настраиваются блоками
-`CONFIG.network` и `CONFIG.downloads`: `enabled`, `windowTitle`, `icon`,
-`endpoint`, `interval`, `startOpen`, `width`, `height` — плюс
-`ignore`/`history`/`timeout` у сети и `maxMB` у загрузчика. Подробнее —
-разделы «Сеть» и «Загрузчик» ниже.
+Окна **Network**, **Download Manager** и **Telegram** настраиваются
+блоками `CONFIG.network`, `CONFIG.downloads` и `CONFIG.telegram`:
+`enabled`, `windowTitle`, `icon`, `startOpen`, `width`, `height` — плюс
+`endpoint`/`interval`/`ignore`/`history`/`timeout` у сети, `maxMB` у
+загрузчика и `url` у фрейма Telegram. Подробнее — разделы «Сеть»,
+«Загрузчик» и «Telegram» ниже.
 
 Стартовая цветовая схема скина WindowMaker — поле `CONFIG.wmtheme`
 (`'default'` | `'steel'` | `'dark'`), см. «Цветовые схемы WindowMaker».
@@ -1053,16 +1055,83 @@ Manager** в Available services показывает число активных
 
 ---
 
+## Telegram (окно-фрейм)
+
+Окно **Telegram** (File → Telegram) встраивает веб-клиент мессенджера в
+iframe: адрес задаёт `CONFIG.telegram.url`, по умолчанию **`/tg/k/`** —
+это прокси внутри `server.py`.
+
+**Почему прокси.** Официальный `web.telegram.org` отдаёт
+`X-Frame-Options: deny` — встраивать его в iframe браузер не даёт
+(Chrome: «refused to connect», Firefox: «will not allow to display»).
+Поэтому панель встраивает свой маршрут `/tg/…`: сервер тянет контент
+`web.telegram.org` и отдаёт его **под origin панели** — страница, её
+MTProto-воркер, шрифты и long-poll ходят в один origin, CORS не нужен
+никому, а заголовки запрета встраивания (`X-Frame-Options`,
+`Content-Security-Policy`) в ответ не попадают.
+
+Как устроено:
+
+* проксируется **только** `web.telegram.org` — хост зафиксирован в
+  `server.py` (`TG_UPSTREAM`), путь запроса подменить его не может;
+  адрес меняется только переменной окружения `TELEGRAM_UPSTREAM`
+  (её держат тесты и локальные зеркала);
+* редиректы апстрима возвращаются с префиксом `/tg/` — иначе страница
+  и её относительные ссылки вышли бы из-под прокси, под запрет
+  фреймирования;
+* проксируются GET/HEAD/POST: MTProto ходит по HTTP, long-poll держит
+  соединение — таймаут `TELEGRAM_TIMEOUT` (сек, по умолчанию 90),
+  потолок POST — 16 МБ (413 выше);
+* адреса апстрима перебираются с коротким срезом (5 с) на не-последнем:
+  `getaddrinfo` отдаёт IPv6 первым, а на домашних сетях он бывает
+  «чёрной дырой» — без среза страница висела бы десятки секунд, пока
+  python ждёт мёртвый адрес (браузер и curl таких ситуаций не замечают,
+  они гоняют happy eyeballs);
+* недоступный апстрим (нет сети/DNS) даёт аккуратный `502` внутри
+  рамки, а не пустое окно;
+* фрейм грузится **один раз — при первом открытии окна** (закрытое окно
+  ничего не тянет); `referrerpolicy="no-referrer"` — панель не шлёт
+  инстансу свой адрес.
+
+`url` можно указать и на **свой веб-инстанс**, разрешающий встраивание —
+тогда фрейм грузит его напрямую, мимо `server.py`. Для чужих сайтов,
+которые никогда не разрешают iframe, внизу окна кнопка **Open in
+browser** открывает адрес во вкладке.
+
+Настройки — `CONFIG.telegram`:
+
+| Поле | Что делает |
+|---|---|
+| `enabled` | `false` — окна, кнопки в таскбаре, пункта меню и карточки не будет |
+| `windowTitle`, `icon` | заголовок окна и буква-иконка |
+| `url` | адрес инстанса: `/tg/k/` (прокси) либо полный адрес своего; он же открывается кнопкой Open in browser |
+| `startOpen` | `true` — открывать окно сразу при загрузке |
+| `width`, `height` | желаемый размер окна (встанет в свободное место) |
+
+Карточка **Telegram** в Available services — внешний сервис: у неё нет
+LAN/Tailscale-ссылок (поле `ext:true` в `config.js`), клик по имени
+открывает окно. В терминале — `open telegram`.
+
+---
+
 ## Безопасность
 
 * Панель отдаёт метрики **без авторизации**. Держи порт 80 в локальной
   сети / Tailscale, наружу не пробрасывай.
 * Нужен доступ к интернету — поставь перед `server.py` nginx/caddy
   с TLS и basic-auth.
+* Telegram: маршрут `/tg/…` — **единственный** путь панели наружу. Он
+  проксирует только `web.telegram.org` (хост зафиксирован в коде;
+  `TELEGRAM_UPSTREAM` меняет его только из окружения сервера) и
+  выкидывает из ответа запреты встраивания. Другие сайты панель не
+  проксирует: внешний `url` в `CONFIG.telegram` браузер грузит напрямую —
+  для официального `web.telegram.org` есть и кнопка «Open in browser»
+  (он запрещает iframe вообще).
 * `server.py` отдаёт только свои пути: `/`, `/config.js`, `/api/stats`,
   `/api/pics`, `/api/music`, `/api/skins`, `/api/fonts`, `/api/layout`,
   `/api/balance`, `/api/network`, `/api/downloads` (+ `POST` на
-  `/api/downloads/control`), картинки из
+  `/api/downloads/control`), прокси Telegram `/tg/…` (только к
+  `web.telegram.org`), картинки из
   `pics/`, треки из `music/`, скины из `skins/`, скачанные файлы из
   `downloads/` (плюс 204 на
   `/favicon.ico`). Другие запросы — 404, произвольного чтения
