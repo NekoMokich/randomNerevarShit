@@ -1,0 +1,19 @@
+{
+  "password": "333",
+  "http_host": "0.0.0.0",
+  "http_port": 8090,
+  "ftp_enabled": true,
+  "ftp_host": "0.0.0.0",
+  "ftp_port": 2121,
+  "ftp_user": "nerevar",
+  "root": "/",
+  "places": [
+    { "name": "Root",  "path": "/",           "icon": "/" },
+    { "name": "Home",  "path": "/home",       "icon": "H" },
+    { "name": "Etc",   "path": "/etc",        "icon": "E" },
+    { "name": "Var",   "path": "/var",        "icon": "V" },
+    { "name": "Opt",   "path": "/opt",        "icon": "O" },
+    { "name": "Tmp",   "path": "/tmp",        "icon": "T" },
+    { "name": "Mnt",   "path": "/mnt",        "icon": "M" }
+  ]
+}

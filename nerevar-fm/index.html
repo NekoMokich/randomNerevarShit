@@ -1,0 +1,699 @@
+<!doctype html>
+<!--
+  ==========================================================================
+  NEREVAR FM — файловый менеджер для домашнего сервера
+  ==========================================================================
+
+  СОСТАВ ПАПКИ
+  ------------
+    index.html   — эта панель: разметка и все стили (блок <style>)
+    app.js       — логика: окна, панели, файловые операции, просмотр,
+                   загрузка файлов, скины
+    config.js    — ВСЕ настройки панели (без секретов!)
+    config.json  — настройки СЕРВЕРА: пароль, порты, корень, закреплённые
+                   места. В git не должен попадать с рабочим паролем.
+    server.py    — сервер: раздаёт панель, отвечает на /api/* (список,
+                   перенос, копирование, удаление, загрузка, скачивание)
+                   и поднимает FTP для выкачивания/загрузки файлов
+    nerevar-fm.service — unit для systemd (автозапуск)
+
+  БЫСТРЫЙ СТАРТ
+  -------------
+    python3 server.py --port 8090
+    открыть http://<ip-сервера>:8090/  и ввести пароль (из config.json)
+
+  ВНЕШНИЙ ВИД
+  -----------
+    Две темы-скина, переключаются меню View (или параметром ?skin=wm):
+      win9x — классические Windows 9x: бирюзовый рабочий стол, серые
+              окна с объёмными кнопками, синий градиент заголовка;
+      wm    — WindowMaker / NeXTSTEP: почти чёрный стол со штрихововкой,
+              чёрные заголовки, кнопки-квадраты, чёрные плашки в меню.
+              Три цветовые схемы: gray (NeXT-серый), steel и dark —
+              View → WindowMaker colors или параметр ?wm=steel / ?wm=dark.
+    Тёмная тема (View → Dark theme) работает поверх обоих.
+  ==========================================================================
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nerevar FM</title>
+<style>
+/* =========================================================================
+   ПАЛИТРА
+   :root — светлые Windows 9x; html[data-theme=dark] — тёмная тема;
+   html[data-skin=wm] — скин WindowMaker (перекрывает обе темы, идёт последним).
+   ВАЖНО: в компонентах ниже нет ни одного «сырого» цвета — только
+   переменные, иначе скин не переключится.
+   ========================================================================= */
+:root{
+  --desktop:#008080; --desktop-img:none;
+  --face:#c0c0c0; --face-2:#dfdfdf; --hl:#ffffff; --sh:#808080; --dk:#222222;
+  --title-a-bg:linear-gradient(90deg,#000080,#1084d0); --title-a-fg:#ffffff;
+  --title-i-bg:linear-gradient(90deg,#7f7f7f,#b3b3b3); --title-i-fg:#e8e8e8;
+  --panel:#ffffff; --panel-fg:#101010; --panel-edge:#808080;
+  --sel-bg:#000080; --sel-fg:#ffffff;
+  --menu-hl-bg:#000080; --menu-hl-fg:#ffffff;
+  --txt:#101010; --txt-dim:#505050; --txt-dim-2:#707070; --txt-fail:#a00000;
+  --icon-dir:#ffd75e; --icon-dir-2:#e0a800; --icon-file:#ffffff; --icon-file-2:#808080;
+  --icon-txt:#000080;
+  --btn-fg:#101010; --btn-off:#808080; --btn-accent:#000080;
+  --bw:2px; --raised:outset; --sunken:inset;
+  --ui-font:Tahoma,Verdana,Geneva,sans-serif;
+  --win-shadow:2px 2px 0 rgba(0,0,0,.35);
+  --scan:none;
+}
+html[data-theme=dark]{
+  --desktop:#123034; --desktop-img:none;
+  --face:#3a3a3a; --face-2:#464646; --hl:#787878; --sh:#161616; --dk:#000000;
+  --title-a-bg:linear-gradient(90deg,#000040,#0a4a80); --title-a-fg:#e8f4ff;
+  --title-i-bg:linear-gradient(90deg,#2e2e2e,#454545); --title-i-fg:#b0b0b0;
+  --panel:#1b1b1b; --panel-fg:#e0e0e0; --panel-edge:#000000;
+  --sel-bg:#103060; --sel-fg:#ffffff;
+  --menu-hl-bg:#103060; --menu-hl-fg:#ffffff;
+  --txt:#e8e8e8; --txt-dim:#a8a8a8; --txt-dim-2:#808080; --txt-fail:#ff8080;
+  --icon-dir:#c8a020; --icon-dir-2:#8a6a00; --icon-file:#d8d8d8; --icon-file-2:#606060;
+  --icon-txt:#cfe0ff;
+  --btn-fg:#e8e8e8; --btn-off:#6a6a6a; --btn-accent:#9ecbff;
+  --win-shadow:2px 2px 0 rgba(0,0,0,.6);
+}
+
+/* ===== Скин WindowMaker / NeXTSTEP (перекрывает обе темы) ================ */
+/* gray — дефолт, NeXT-серый (атрибут data-wmtheme для него не ставится) */
+html[data-skin=wm]{
+  --desktop:#131313; --desktop-img:repeating-conic-gradient(#171717 0 25%,#101010 0 50%);
+  --face:#aaaaaa; --face-2:#b8b8b8; --hl:#ffffff; --sh:#666666; --dk:#000000;
+  --title-a-bg:#000000; --title-a-fg:#ffffff;
+  --title-i-bg:repeating-linear-gradient(180deg,#000000 0 1px,#a8a8a8 1px 4px); --title-i-fg:#000000;
+  --panel:#ffffff; --panel-fg:#000000; --panel-edge:#666666;
+  --sel-bg:#000000; --sel-fg:#ffffff;
+  --menu-hl-bg:#000000; --menu-hl-fg:#ffffff;
+  --txt:#000000; --txt-dim:#333333; --txt-dim-2:#4d4d4d; --txt-fail:#990000;
+  --icon-dir:#c8c8c8; --icon-dir-2:#000000; --icon-file:#ffffff; --icon-file-2:#000000;
+  --icon-txt:#000000;
+  --btn-fg:#000000; --btn-off:#6b6b6b; --btn-accent:#000000;
+  --bw:1px; --raised:solid; --sunken:solid;
+  --ui-font:"Lucida Grande","Lucida Sans",Helvetica,Arial,sans-serif;
+  --win-shadow:3px 3px 0 rgba(0,0,0,.5);
+}
+/* steel — сталь с синим хромом, как тема WindowMaker SteelBlue */
+html[data-skin=wm][data-wmtheme=steel]{
+  --desktop:#141b26; --desktop-img:repeating-conic-gradient(#18202e 0 25%,#101722 0 50%);
+  --face:#a9b8cb; --face-2:#c3cede; --hl:#f2f6fb; --sh:#5d7391; --dk:#000000;
+  --title-a-bg:#1c3050; --title-a-fg:#ffffff;
+  --title-i-bg:repeating-linear-gradient(180deg,#1c3050 0 1px,#a9b8cb 1px 4px); --title-i-fg:#0b1622;
+  --panel:#f4f7fb; --panel-fg:#0b1622; --panel-edge:#66798f;
+  --sel-bg:#1c3050; --sel-fg:#ffffff;
+  --menu-hl-bg:#1c3050; --menu-hl-fg:#ffffff;
+  --txt:#0b1622; --txt-dim:#2c3d52; --txt-dim-2:#3f5269; --txt-fail:#a01818;
+  --icon-dir:#8fa3ba; --icon-dir-2:#1c3050; --icon-file:#f4f7fb; --icon-file-2:#12233c;
+  --icon-txt:#12233c;
+  --btn-fg:#0b1622; --btn-off:#7e8ea3; --btn-accent:#1c3050;
+  --win-shadow:3px 3px 0 rgba(0,0,0,.5);
+}
+/* dark — тёмная схема в духе WindowMaker Dark / Nightmare */
+html[data-skin=wm][data-wmtheme=dark]{
+  --desktop:#131313; --desktop-img:repeating-conic-gradient(#171717 0 25%,#101010 0 50%);
+  --face:#3f3f3f; --face-2:#4a4a4a; --hl:#e6e6e6; --sh:#6a6a6a; --dk:#000000;
+  --title-a-bg:#000000; --title-a-fg:#ffffff;
+  --title-i-bg:repeating-linear-gradient(180deg,#000000 0 1px,#5f5f5f 1px 4px); --title-i-fg:#c8c8c8;
+  --panel:#2b2b2b; --panel-fg:#e8e8e8; --panel-edge:#6a6a6a;
+  --sel-bg:#e6e6e6; --sel-fg:#000000;
+  --menu-hl-bg:#e6e6e6; --menu-hl-fg:#000000;
+  --txt:#e8e8e8; --txt-dim:#a8a8a8; --txt-dim-2:#989898; --txt-fail:#ff6b6b;
+  --icon-dir:#7a7a7a; --icon-dir-2:#ffffff; --icon-file:#e6e6e6; --icon-file-2:#000000;
+  --icon-txt:#ffffff;
+  --btn-fg:#f0f0f0; --btn-off:#808080; --btn-accent:#e6e6e6;
+  --win-shadow:3px 3px 0 rgba(0,0,0,.6);
+}
+/* NeXT-детали: крестик закрытия слева, заголовок по центру, без «свернуть/
+   развернуть» — как в настоящем WindowMaker */
+html[data-skin=wm] .titlebar{padding-left:28px;justify-content:center}
+html[data-skin=wm] .titlebar .ticon{display:none}
+html[data-skin=wm] .titlebar .ttext{flex:0 1 auto;text-align:center}
+html[data-skin=wm] .winbtns{position:absolute;left:4px;top:3px}
+html[data-skin=wm] .winbtns .winbtn[data-win=min],
+html[data-skin=wm] .winbtns .winbtn[data-win=max]{display:none}
+html[data-skin=wm] .winbtn{width:16px;height:15px}
+html[data-skin=wm] .winbtn:active{background:var(--dk);color:var(--hl)}
+html:not([data-skin=wm]) .wm-only{display:none}
+
+/* ===== БАЗА ============================================================== */
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;overflow:hidden;background-color:var(--desktop);
+  background-image:var(--desktop-img);background-size:8px 8px;
+  font:13px/1.35 var(--ui-font);color:var(--txt);
+  -webkit-font-smoothing:antialiased}
+.scene{position:absolute;top:0;left:0;right:0;bottom:0;overflow:hidden}
+/* вход: оболочка видна, но затемнена и не принимает нажатия */
+.scene.locked>.app-shell{pointer-events:none}
+.scene.locked::after{content:"";position:absolute;inset:0;z-index:5;
+  background:rgba(0,0,0,.28)}
+
+/* ===== ОКНА ============================================================== */
+.appwindow{position:absolute;display:flex;flex-direction:column;
+  min-width:240px;min-height:120px;background:var(--face);
+  border-width:var(--bw);border-style:var(--raised);
+  border-color:var(--hl) var(--dk) var(--dk) var(--hl);
+  padding:3px;box-shadow:var(--win-shadow)}
+.appwindow.active{z-index:50}
+
+/* Оболочка-приложение: занимает весь экран, без рамки, заголовка и таскбара */
+.app-shell{position:absolute;inset:0;z-index:0;width:100%;height:100%;
+  min-width:0;min-height:0;padding:0;border:0;box-shadow:none;
+  background:var(--face)}
+.app-shell>.menubar{padding:3px 4px 2px}
+.brand{margin-left:auto;padding:3px 10px;font:bold 12px var(--ui-font);
+  color:var(--txt-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  align-self:center}
+.s-clock{flex:0 0 auto;font-weight:bold;color:var(--txt-dim);
+  font-variant-numeric:tabular-nums;font-size:11px}
+.titlebar{flex:0 0 auto;display:flex;align-items:center;gap:6px;height:22px;
+  padding:0 3px 0 6px;background:var(--title-a-bg);color:var(--title-a-fg);
+  font-weight:bold;font-size:12px;cursor:move;user-select:none;
+  touch-action:none;overflow:hidden;white-space:nowrap;position:relative}
+.appwindow:not(.active)>.titlebar{background:var(--title-i-bg);color:var(--title-i-fg)}
+.titlebar .ticon{width:14px;height:14px;flex:0 0 auto;display:grid;place-items:center;
+  background:var(--face);color:var(--icon-txt);border:1px solid var(--dk);
+  font:bold 10px/1 var(--ui-font)}
+.titlebar .ttext{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis}
+.winbtns{display:flex;gap:3px;flex:0 0 auto}
+.winbtn{width:17px;height:15px;padding:0;display:grid;place-items:center;
+  background:var(--face);color:var(--btn-fg);cursor:default;
+  border-width:var(--bw);border-style:var(--raised);
+  border-color:var(--hl) var(--sh) var(--sh) var(--hl);
+  font:bold 10px/1 var(--ui-font);user-select:none}
+.winbtn:active{border-style:var(--sunken);border-color:var(--sh) var(--hl) var(--hl) var(--sh)}
+.titlebar .winbtn{color:var(--btn-fg)}
+.resize-grip{position:absolute;right:1px;bottom:1px;width:14px;height:14px;
+  cursor:nwse-resize;touch-action:none;z-index:5;
+  background-image:repeating-linear-gradient(135deg,transparent 0 40%,var(--sh) 40% 50%,transparent 50% 60%,var(--sh) 60% 70%,transparent 70% 80%,var(--sh) 80% 90%,transparent 90%);
+  user-select:none}
+/* развёрнутое окно занимает всю сцену — как «оболочка на весь экран» */
+.appwindow[data-max="1"]{border-width:0;padding:0;box-shadow:none}
+.appwindow[data-max="1"]>.titlebar{margin:0}
+.appwindow[data-max="1"] .resize-grip{display:none}
+
+/* ===== МЕНЮ ============================================================== */
+.menubar{flex:0 0 auto;display:flex;gap:2px;padding:3px 2px 2px;position:relative;z-index:40}
+.menuitem{position:relative;padding:3px 9px;border:var(--bw) solid transparent;
+  cursor:default;user-select:none;white-space:nowrap;font-size:12px}
+.menuitem:hover{border-color:var(--hl) var(--dk) var(--dk) var(--hl);background:var(--face-2)}
+.menuitem.open{border-color:var(--dk) var(--hl) var(--hl) var(--dk);background:var(--face-2)}
+.menuitem.open>span:first-child{background:var(--menu-hl-bg);color:var(--menu-hl-fg)}
+.menu{display:none;position:absolute;top:100%;left:0;min-width:196px;
+  background:var(--face);border-width:var(--bw);border-style:var(--raised);
+  border-color:var(--hl) var(--dk) var(--dk) var(--hl);
+  box-shadow:var(--win-shadow);padding:3px;z-index:60}
+.menuitem.open .menu{display:block}
+.menu button{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  width:100%;text-align:left;background:transparent;border:0;padding:4px 9px;
+  font:12px var(--ui-font);color:var(--txt);cursor:default}
+.menu button:hover:not([disabled]){background:var(--menu-hl-bg);color:var(--menu-hl-fg)}
+.menu button[disabled]{color:var(--btn-off)}
+.menu button .sc{color:var(--txt-dim-2);font-size:11px}
+.menu button:hover .sc{color:var(--menu-hl-fg)}
+.menu .sep{height:1px;margin:4px 2px;background:var(--sh);
+  border-bottom:1px solid var(--hl)}
+.menu .mark{width:12px;display:inline-block}
+
+/* ===== КНОПКИ =========================================================== */
+.btn{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;
+  background:var(--face);color:var(--btn-fg);font:12px var(--ui-font);
+  cursor:default;white-space:nowrap;
+  border-width:var(--bw);border-style:var(--raised);
+  border-color:var(--hl) var(--sh) var(--sh) var(--hl)}
+.btn:active:not([disabled]){border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh);padding:5px 7px 3px 9px}
+.btn[disabled]{color:var(--btn-off);border-color:var(--face-2) var(--sh) var(--sh) var(--face-2)}
+.btn .g{font:bold 13px/1 var(--ui-font);color:var(--btn-accent)}
+.btn[disabled] .g{color:var(--btn-off)}
+.btn.primary{font-weight:bold}
+.btn .mark{width:10px;display:inline-block;color:var(--btn-accent)}
+.btn.on{border-style:var(--sunken);border-color:var(--sh) var(--hl) var(--hl) var(--sh);background:var(--face-2)}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:11px;font-weight:bold}
+input[type=text],input[type=password],input[type=search],.txt{
+  width:100%;padding:5px 6px;background:var(--panel);color:var(--panel-fg);
+  font:13px var(--ui-font);outline:none;
+  border-width:var(--bw);border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh)}
+input:focus{outline:1px dotted var(--panel-fg);outline-offset:-3px}
+
+/* ===== ФАЙЛОВЫЙ МЕНЕДЖЕР =============================================== */
+.toolbar{flex:0 0 auto;display:flex;flex-wrap:wrap;gap:4px;padding:2px 3px 5px}
+.toolbar .sep{width:1px;align-self:stretch;margin:1px 3px;background:var(--sh);
+  border-right:1px solid var(--hl)}
+.panes{flex:1 1 auto;min-height:0;display:flex;gap:6px;padding:0 3px}
+.pane{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:4px}
+.pane.focused .path{outline:1px dotted var(--panel-fg);outline-offset:-3px}
+.places{flex:0 0 auto;display:flex;gap:3px;overflow-x:auto;padding-bottom:1px}
+.place{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;
+  background:var(--face);color:var(--btn-fg);font:11px var(--ui-font);
+  cursor:default;white-space:nowrap;
+  border-width:var(--bw);border-style:var(--raised);
+  border-color:var(--hl) var(--sh) var(--sh) var(--hl)}
+.place:active,.place.here{border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh)}
+.place .pi{display:grid;place-items:center;width:13px;height:13px;flex:0 0 auto;
+  background:var(--sel-bg);color:var(--sel-fg);font:bold 9px/1 var(--ui-font)}
+.pathrow{flex:0 0 auto;display:flex;gap:4px}
+.path{flex:1 1 auto;min-width:0}
+.pathbtn{flex:0 0 auto;width:26px;justify-content:center;padding:4px 0}
+.panebody{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;
+  background:var(--panel);color:var(--panel-fg);overflow:auto;
+  border-width:var(--bw);border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh)}
+.listhead{position:sticky;top:0;z-index:2;display:grid;
+  grid-template-columns:1fr 84px 128px;gap:0;background:var(--face);
+  color:var(--txt);font-size:11px;font-weight:bold;
+  border-bottom:var(--bw) solid var(--sh)}
+.listhead span{padding:3px 6px;overflow:hidden;white-space:nowrap;
+  border-right:1px solid var(--sh);cursor:default}
+.listhead span:last-child{border-right:0}
+.listhead span.on::after{content:" ▾"}
+.row{display:grid;grid-template-columns:1fr 84px 128px;align-items:center;
+  font-size:13px;cursor:default;user-select:none;min-height:19px}
+.row:hover{background:var(--face-2);color:var(--txt)}
+.row.sel{background:var(--sel-bg);color:var(--sel-fg)}
+.row.sel .dim,.row.sel .ico+.n .d{color:var(--sel-fg)}
+.row.cut{opacity:.45}
+.row .n{display:flex;align-items:center;gap:6px;padding:1px 6px;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .sz,.row .dt{padding:1px 6px;text-align:right;font-size:12px;
+  overflow:hidden;white-space:nowrap}
+.row .dt{text-align:left}
+.dim{color:var(--txt-dim)}
+.row.sel .dim{color:var(--sel-fg);opacity:.85}
+.ico{position:relative;flex:0 0 auto;width:14px;height:11px;margin-top:2px;
+  background:var(--icon-file);border:1px solid var(--icon-file-2)}
+.ico.file{clip-path:polygon(0 0,68% 0,100% 26%,100% 100%,0 100%);
+  background:var(--icon-file);border-color:var(--icon-file-2)}
+.ico.dir{background:var(--icon-dir);border-color:var(--icon-dir-2);height:10px}
+.ico.dir::before{content:"";position:absolute;top:-4px;left:-1px;width:7px;height:4px;
+  background:var(--icon-dir);border:1px solid var(--icon-dir-2);border-bottom:0}
+.row.sel .ico{border-color:var(--sel-fg)}
+.pstatus{flex:0 0 auto;display:flex;justify-content:space-between;gap:8px;
+  font-size:11px;color:var(--txt-dim);padding:0 3px;white-space:nowrap;
+  overflow:hidden}
+.statusbar{flex:0 0 auto;display:flex;gap:8px;align-items:center;
+  margin:5px 3px 1px;padding:4px 7px;font-size:11px;color:var(--txt);
+  border-width:var(--bw);border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh)}
+.statusbar .s-left{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.statusbar .s-right{flex:0 0 auto;color:var(--txt-dim)}
+.dropmask{position:absolute;inset:0;z-index:10;display:none;
+  place-items:center;background:var(--sel-bg);color:var(--sel-fg);
+  font:bold 15px var(--ui-font);opacity:.85;pointer-events:none}
+.pane.dragover .dropmask{display:grid}
+.pane.dragover .panebody{border-color:var(--sel-fg)}
+
+/* ===== ПРОСМОТРЩИК / РЕДАКТОР ========================================== */
+.vbar{flex:0 0 auto;display:flex;align-items:center;gap:4px;padding:1px 3px 4px}
+.vbar .btn{padding:3px 7px;font-size:11px}
+.vbar .vspacer{flex:1 1 auto}
+.vbody{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;
+  overflow:auto;background:var(--panel);color:var(--panel-fg);
+  border-width:var(--bw);border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh);padding:6px}
+.vbody img{max-width:100%;height:auto;image-rendering:auto;
+  outline:1px solid var(--panel-edge)}
+.vbody video{max-width:100%;max-height:100%;background:#000;
+  outline:1px solid var(--panel-edge)}
+.vbody audio{width:min(560px,100%)}
+.vaudio{display:flex;flex-direction:column;align-items:center;gap:12px;
+  width:100%;text-align:center}
+.vaudio .vaudio-ico{font-size:46px;line-height:1;color:var(--txt-dim)}
+.vaudio .vaudio-name{font:bold 14px var(--ui-font);word-break:break-all;max-width:100%}
+.vbody pre{margin:0;font:12px/1.4 "DejaVu Sans Mono","Lucida Console",monospace;
+  white-space:pre;align-self:flex-start;max-width:100%}
+.vbody .vmeta{color:var(--txt-dim);font:13px var(--ui-font);text-align:center}
+.vbody.editmode{align-items:stretch;justify-content:flex-start;padding:4px;overflow:hidden}
+.vedit{flex:1 1 auto;width:100%;height:100%;min-height:0;resize:none;
+  font:12px/1.45 "DejaVu Sans Mono","Lucida Console",monospace;
+  background:var(--panel);color:var(--panel-fg);padding:6px;
+  border-width:var(--bw);border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh);
+  outline:none;tab-size:4;overflow:auto;white-space:pre-wrap}
+.vedit.ro{color:var(--txt-dim)}
+
+/* ===== ЛОГИН / ДИАЛОГ ================================================== */
+.dlgbody{padding:14px 16px;display:flex;flex-direction:column;gap:12px;min-width:300px}
+.dlgbody p{margin:0;font-size:12px;line-height:1.5}
+.dlgbody .fail{color:var(--txt-fail);font-weight:bold;min-height:15px}
+.dlgbtns{display:flex;gap:8px;justify-content:flex-end}
+.helptext{flex:1 1 auto;min-height:0;overflow:auto;padding:12px 16px;font-size:12px;
+  line-height:1.5;background:var(--panel);color:var(--panel-fg);
+  border-width:var(--bw);border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh)}
+.helptext h3{margin:14px 0 6px;font-size:13px;color:var(--txt);background:var(--face-2);
+  padding:3px 6px;border-bottom:1px solid var(--sh)}
+.helptext h3:first-child{margin-top:0}
+.helptext table{border-collapse:collapse;width:100%;margin:4px 0}
+.helptext td{padding:2px 6px 2px 0;vertical-align:top}
+.helptext td:first-child{white-space:nowrap;font-weight:bold;color:var(--btn-accent)}
+.helptext kbd{font:11px var(--ui-font);background:var(--face);color:var(--txt);
+  border:1px solid var(--sh);padding:0 4px}
+.helptext code{font:12px "DejaVu Sans Mono",monospace;background:var(--face);padding:0 3px}
+
+/* ===== ЗАКРЕПЛЁННЫЕ МЕСТА ============================================== */
+.plrow{display:grid;grid-template-columns:16px 90px 1fr;gap:6px;align-items:center;
+  font-size:12px;padding:2px 6px;cursor:default;min-height:20px}
+.plrow:hover{background:var(--face-2);color:var(--txt)}
+.plrow.sel{background:var(--sel-bg);color:var(--sel-fg)}
+.plrow .pn{font-weight:bold;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plrow .pp{color:var(--txt-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plrow.sel .pp{color:var(--sel-fg);opacity:.85}
+
+/* ===== ПРОГРЕСС ЗАГРУЗКИ =============================================== */
+.prog{position:absolute;left:0;right:0;bottom:0;height:8px;background:var(--face-2);
+  border-top:1px solid var(--sh);display:none}
+.prog.on{display:block}
+.prog i{display:block;height:100%;width:0;background:var(--sel-bg)}
+
+/* ===== ПРОКРУТКА (как в NeXT/WM) ======================================= */
+::-webkit-scrollbar{width:15px;height:15px}
+::-webkit-scrollbar-track{background:var(--face-2);border-left:1px solid var(--sh)}
+::-webkit-scrollbar-thumb{background:var(--face);
+  border:1px solid; border-color:var(--hl) var(--sh) var(--sh) var(--hl)}
+::-webkit-scrollbar-thumb:hover{background:var(--face-2)}
+::-webkit-scrollbar-corner{background:var(--face)}
+*{scrollbar-color:var(--face) var(--face-2);scrollbar-width:auto}
+
+/* --- точные детали трёх схем WindowMaker (кнопки и полосы прокрутки) ---- */
+/* gray — дефолт: серые квадратные кнопки и полосы в духе NeXT */
+html[data-skin=wm] .winbtn{background:#b0b0b0;border-color:#ffffff #666666 #666666 #ffffff;color:#000000}
+html[data-skin=wm] .winbtn:active{background:#000000;color:#ffffff;border-color:#666666 #ffffff #ffffff #666666}
+html[data-skin=wm] ::-webkit-scrollbar-track{background:#c4c4c4}
+html[data-skin=wm] ::-webkit-scrollbar-thumb{background:#a0a0a0;border:1px outset #e0e0e0}
+html[data-skin=wm] ::-webkit-scrollbar-thumb:hover{background:#b0b0b0}
+html[data-skin=wm] ::-webkit-scrollbar-button{background-color:#b0b0b0;border:1px outset #e8e8e8}
+html[data-skin=wm] *{scrollbar-color:#8f8f8f #c0c0c0}
+/* steel — SteelBlue: стальные кнопки с синим хромом */
+html[data-skin=wm][data-wmtheme=steel] .winbtn{background:#b6c3d3;border-color:#eef3f9 #4a5f7c #4a5f7c #eef3f9;color:#0b1622}
+html[data-skin=wm][data-wmtheme=steel] .winbtn:active{background:#1c3050;color:#ffffff;border-color:#4a5f7c #eef3f9 #eef3f9 #4a5f7c}
+html[data-skin=wm][data-wmtheme=steel] ::-webkit-scrollbar-track{background:#9fadc0}
+html[data-skin=wm][data-wmtheme=steel] ::-webkit-scrollbar-thumb{background:#7e93ad;border:1px outset #c8d3e0}
+html[data-skin=wm][data-wmtheme=steel] ::-webkit-scrollbar-thumb:hover{background:#8fa3ba}
+html[data-skin=wm][data-wmtheme=steel] ::-webkit-scrollbar-button{background-color:#8398b0;border:1px outset #c8d3e0}
+html[data-skin=wm][data-wmtheme=steel] *{scrollbar-color:#7e93ad #9fadc0}
+/* dark — Dark / Nightmare: светлые кнопки на тёмном окне */
+html[data-skin=wm][data-wmtheme=dark] .winbtn{background:#5a5a5a;border-color:#8a8a8a #2a2a2a #2a2a2a #8a8a8a;color:#f0f0f0}
+html[data-skin=wm][data-wmtheme=dark] .winbtn:active{background:#e6e6e6;color:#000000;border-color:#2a2a2a #8a8a8a #8a8a8a #2a2a2a}
+html[data-skin=wm][data-wmtheme=dark] ::-webkit-scrollbar-track{background:#2b2b2b}
+html[data-skin=wm][data-wmtheme=dark] ::-webkit-scrollbar-thumb{background:#5a5a5a;border:1px outset #7a7a7a}
+html[data-skin=wm][data-wmtheme=dark] ::-webkit-scrollbar-thumb:hover{background:#6a6a6a}
+html[data-skin=wm][data-wmtheme=dark] ::-webkit-scrollbar-button{background-color:#555555;border:1px outset #7a7a7a}
+html[data-skin=wm][data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
+
+/* ===== УЗКИЙ ЭКРАН ===================================================== */
+@media (max-width:760px){
+  .panes{flex-direction:column;gap:8px}
+  .toolbar{gap:3px;padding:2px 2px 4px}
+  .btn{padding:3px 6px;font-size:11px}
+  .place{padding:2px 4px}
+  .row .dt,.listhead span[data-sort="date"]{display:none}
+  .row,.listhead{grid-template-columns:1fr 76px}
+  .places{flex-wrap:nowrap;overflow-x:auto}
+}
+</style>
+<script src="config.js"></script>
+<script>
+/* Скин, тема и цветовая схема WindowMaker — ДО первой отрисовки,
+   чтобы рабочий стол не мигнул. Порядок:
+   ?skin= / ?theme= / ?wm= -> localStorage -> config.js -> дефолт. */
+(function(){
+ var C=window.CONFIG||{},q={};
+ try{q=new URLSearchParams(location.search)}catch(e){}
+ var s=null,t=null,w=null;
+ try{s=localStorage.getItem('nerevar-fm.skin')}catch(e){}
+ try{t=localStorage.getItem('nerevar-fm.theme')}catch(e){}
+ try{w=localStorage.getItem('nerevar-fm.wmtheme')}catch(e){}
+ if(q.get('skin')==='wm'||q.get('skin')==='win9x')s=q.get('skin');
+ if(q.get('theme')==='dark'||q.get('theme')==='light')t=q.get('theme');
+ if(q.get('wm')==='gray'||q.get('wm')==='steel'||q.get('wm')==='dark')w=q.get('wm');
+ if(s!=='wm'&&s!=='win9x')s=C.skin==='wm'?'wm':'win9x';
+ if(t!=='dark'&&t!=='light')t=C.theme==='dark'?'dark':'light';
+ if(w!=='gray'&&w!=='steel'&&w!=='dark')w=C.wmtheme==='steel'||C.wmtheme==='dark'?C.wmtheme:'gray';
+ document.documentElement.setAttribute('data-skin',s);
+ document.documentElement.setAttribute('data-theme',t);
+ if(w!=='gray')document.documentElement.setAttribute('data-wmtheme',w);
+ var f=null;try{f=localStorage.getItem('nerevar-fm.font')}catch(e){}
+ if(!f)f=(C.font&&String(C.font).trim())||'';
+ if(f)document.documentElement.style.setProperty('--ui-font',f);
+})();
+</script>
+</head>
+<body>
+
+<div class="scene" id="scene">
+
+  <!-- ===== ОКНО ВХОДА ===== -->
+  <section class="appwindow" id="winLogin" style="left:50%;top:70px;transform:translateX(-50%);width:340px">
+    <div class="titlebar"><span class="ticon" data-cfg="serverIcon">F</span>
+      <span class="ttext">Nerevar FM — sign in</span></div>
+    <div class="dlgbody">
+      <p>Введите пароль, чтобы управлять файлами сервера.<br>
+         <span class="dim" id="loginHint">Один пароль действует и для панели, и для FTP.</span></p>
+      <div class="field">
+        <label for="loginPass">Password</label>
+        <input type="password" id="loginPass" autocomplete="current-password" spellcheck="false">
+      </div>
+      <div class="fail" id="loginErr"></div>
+      <div class="dlgbtns">
+        <button class="btn primary" id="loginBtn"><span class="g">→</span> Connect</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== ФАЙЛОВЫЙ МЕНЕДЖЕР — на всё окно, без рабочего стола и таскбара ===== -->
+  <section class="appwindow app-shell" id="winFm">
+    <div class="menubar">
+      <div class="menuitem"><span>File</span>
+        <div class="menu">
+          <button data-act="upload"><span><span class="mark">↑</span> Upload files…</span><span class="sc">Ctrl+U</span></button>
+          <button data-act="download"><span><span class="mark">↓</span> Download selected</span><span class="sc">Alt+D</span></button>
+          <button data-act="view"><span><span class="mark">V</span> View selected…</span><span class="sc">F3</span></button>
+          <div class="sep"></div>
+          <button data-act="mkdir"><span><span class="mark">+</span> New folder…</span><span class="sc">F7</span></button>
+          <button data-act="newfile"><span><span class="mark">·</span> New file…</span></button>
+          <div class="sep"></div>
+          <button data-act="pin"><span><span class="mark">★</span> Pin this folder</span></button>
+          <button data-act="refresh"><span><span class="mark">↺</span> Refresh</span><span class="sc">Ctrl+R</span></button>
+        </div>
+      </div>
+      <div class="menuitem"><span>Edit</span>
+        <div class="menu">
+          <button data-act="cut"><span><span class="mark">✂</span> Cut</span><span class="sc">Ctrl+X</span></button>
+          <button data-act="copy"><span><span class="mark">⧉</span> Copy</span><span class="sc">Ctrl+C</span></button>
+          <button data-act="paste"><span><span class="mark">▤</span> Paste</span><span class="sc">Ctrl+V</span></button>
+          <button data-act="undo"><span><span class="mark">↶</span> Undo last action</span><span class="sc">Ctrl+Z</span></button>
+          <div class="sep"></div>
+          <button data-act="rename"><span><span class="mark">✎</span> Rename…</span><span class="sc">F2</span></button>
+          <button data-act="delete"><span><span class="mark">✗</span> Delete…</span><span class="sc">F8</span></button>
+          <div class="sep"></div>
+          <button data-act="toother"><span><span class="mark">⇉</span> Copy to other pane</span><span class="sc">F5</span></button>
+          <button data-act="moveother"><span><span class="mark">→</span> Move to other pane</span><span class="sc">F6</span></button>
+          <div class="sep"></div>
+          <button data-act="invert"><span><span class="mark">◧</span> Invert selection</span><span class="sc">Ins</span></button>
+          <button data-act="deselect"><span><span class="mark">□</span> Deselect all</span></button>
+        </div>
+      </div>
+      <div class="menuitem"><span>View</span>
+        <div class="menu">
+          <button data-act="sortname"><span><span class="mark" data-mark="sortname">✓</span> Sort by name</span></button>
+          <button data-act="sortsize"><span><span class="mark" data-mark="sortsize">✓</span> Sort by size</span></button>
+          <button data-act="sortdate"><span><span class="mark" data-mark="sortdate">✓</span> Sort by date</span></button>
+          <div class="sep"></div>
+          <button data-act="hidden"><span><span class="mark" data-mark="hidden">✓</span> Show hidden files</span><span class="sc">Ctrl+H</span></button>
+          <button data-act="namesep"><span><span class="mark" data-mark="namesep">✓</span> Separate extensions</span></button>
+          <div class="sep"></div>
+          <button data-act="skin"><span><span class="mark" data-mark="skin">✓</span> WindowMaker skin</span></button>
+          <button class="wm-only" data-act="wmgray"><span><span class="mark" data-mark="wmgray">✓</span> WindowMaker: NeXT gray</span></button>
+          <button class="wm-only" data-act="wmsteel"><span><span class="mark" data-mark="wmsteel">✓</span> WindowMaker: SteelBlue</span></button>
+          <button class="wm-only" data-act="wmdark"><span><span class="mark" data-mark="wmdark">✓</span> WindowMaker: Dark</span></button>
+          <button data-act="theme"><span><span class="mark" data-mark="theme">✓</span> Dark theme</span></button>
+          <div class="sep"></div>
+          <button data-act="places"><span><span class="mark">★</span> Manage places…</span></button>
+        </div>
+      </div>
+      <div class="menuitem"><span>Help</span>
+        <div class="menu">
+          <button data-act="help"><span>Keyboard & FTP…</span><span class="sc">F1</span></button>
+          <button data-act="about"><span>About</span></button>
+        </div>
+      </div>
+      <span class="brand" data-cfg="fmTitle">File Manager</span>
+    </div>
+
+    <div class="toolbar" id="toolbar">
+      <button class="btn" data-act="up"><span class="g">↑</span> Up</button>
+      <button class="btn" data-act="refresh"><span class="g">↺</span> Refresh</button>
+      <span class="sep"></span>
+      <button class="btn" data-act="mkdir"><span class="g">+</span> Folder</button>
+      <button class="btn" data-act="newfile"><span class="g">·</span> File</button>
+      <button class="btn" data-act="rename"><span class="g">✎</span> Rename</button>
+      <button class="btn" data-act="delete"><span class="g">✗</span> Delete</button>
+      <span class="sep"></span>
+      <button class="btn" data-act="cut"><span class="g">✂</span> Cut</button>
+      <button class="btn" data-act="copy"><span class="g">⧉</span> Copy</button>
+      <button class="btn" data-act="paste"><span class="g">▤</span> Paste</button>
+      <button class="btn" data-act="undo" title="Undo last file action (Ctrl+Z)"><span class="g">↶</span> Undo</button>
+      <span class="sep"></span>
+      <button class="btn" data-act="upload"><span class="g">↑</span> Upload</button>
+      <button class="btn" data-act="download"><span class="g">↓</span> Download</button>
+      <button class="btn" data-act="view"><span class="g">V</span> View</button>
+      <button class="btn" data-act="hidden" title="Show/hide dotfiles (Ctrl+H)"><span class="g">.</span> Dotfiles <span class="mark" data-mark="hidden">✓</span></button>
+      <span class="sep"></span>
+      <button class="btn" data-act="pin"><span class="g">★</span> Pin</button>
+      <input type="file" id="fileInput" multiple hidden>
+    </div>
+
+    <div class="panes" id="panes">
+      <div class="pane" data-side="left">
+        <div class="places" data-places></div>
+        <div class="pathrow">
+          <button class="btn pathbtn" data-nav="back" title="Назад (Alt+←)" disabled>←</button>
+          <button class="btn pathbtn" data-nav="forward" title="Вперёд (Alt+→)" disabled>→</button>
+          <input type="text" class="path txt" data-path spellcheck="false" value="/" title="Путь (Enter — перейти)">
+          <button class="btn pathbtn" data-act="up" title="Вверх (Backspace)">↑</button>
+        </div>
+        <div class="panebody" data-body tabindex="0">
+          <div class="listhead">
+            <span data-sort="name" class="on">Name</span>
+            <span data-sort="size">Size</span>
+            <span data-sort="date">Modified</span>
+          </div>
+          <div data-list></div>
+          <div class="dropmask">Drop here to MOVE</div>
+        </div>
+        <div class="pstatus"><span data-count>—</span><span data-free></span></div>
+      </div>
+
+      <div class="pane" data-side="right">
+        <div class="places" data-places></div>
+        <div class="pathrow">
+          <button class="btn pathbtn" data-nav="back" title="Назад (Alt+←)" disabled>←</button>
+          <button class="btn pathbtn" data-nav="forward" title="Вперёд (Alt+→)" disabled>→</button>
+          <input type="text" class="path txt" data-path spellcheck="false" value="/" title="Путь (Enter — перейти)">
+          <button class="btn pathbtn" data-act="up" title="Вверх (Backspace)">↑</button>
+        </div>
+        <div class="panebody" data-body tabindex="0">
+          <div class="listhead">
+            <span data-sort="name" class="on">Name</span>
+            <span data-sort="size">Size</span>
+            <span data-sort="date">Modified</span>
+          </div>
+          <div data-list></div>
+          <div class="dropmask">Drop here to MOVE</div>
+        </div>
+        <div class="pstatus"><span data-count>—</span><span data-free></span></div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <span class="s-left" id="fmStatus">Not connected</span>
+      <span class="s-clock" id="appClock" title="">--:--</span>
+      <span class="s-right" id="fmFtp"></span>
+      <div class="prog" id="upProg"><i></i></div>
+    </div>
+  </section>
+
+  <!-- ===== ОКНО ПРОСМОТРА ===== -->
+  <section class="appwindow viewer-win" id="winView" hidden>
+    <div class="titlebar"><span class="ticon">V</span>
+      <span class="ttext" data-vrole="title">Viewer</span>
+      <span class="winbtns">
+        <button class="winbtn" data-win="min" title="Свернуть">_</button>
+        <button class="winbtn" data-win="close" title="Закрыть">×</button>
+      </span>
+    </div>
+    <div class="menubar">
+      <div class="menuitem"><span>File</span>
+        <div class="menu">
+          <button data-vact="edit" disabled><span><span class="mark">✎</span> Edit text</span></button>
+          <button data-vact="saveText" disabled><span><span class="mark">💾</span> Save file</span><span class="sc">Ctrl+S</span></button>
+          <div class="sep"></div>
+          <button data-vact="open"><span>Open with browser…</span></button>
+          <button data-vact="save"><span>Save as…</span></button>
+          <div class="sep"></div>
+          <button data-vact="close"><span>Close</span></button>
+        </div>
+      </div>
+      <div class="menuitem"><span>View</span>
+        <div class="menu">
+          <button data-vact="reload"><span>Reload</span><span class="sc">Ctrl+R</span></button>
+          <button data-vact="wrap"><span><span class="mark" data-vrole="wrapMark">✓</span> Word wrap</span></button>
+        </div>
+      </div>
+    </div>
+    <div class="vbar">
+      <button class="btn" data-vrole="editBtn" data-vact="edit" disabled><span class="g">✎</span> <span data-vrole="editLabel">Edit</span></button>
+      <button class="btn" data-vrole="saveBtn" data-vact="saveText" disabled><span class="g">💾</span> Save</button>
+      <span class="vspacer"></span>
+      <span class="dim" data-vrole="dirty"></span>
+    </div>
+    <div class="vbody" data-vrole="body"><div class="vmeta">Nothing to view</div></div>
+    <div class="statusbar"><span class="s-left" data-vrole="meta"></span>
+      <span class="s-right" data-vrole="size"></span></div>
+  </section>
+
+  <!-- ===== ОКНО ЗАКРЕПЛЁННЫХ МЕСТ ===== -->
+  <section class="appwindow" id="winPlaces" hidden>
+    <div class="titlebar"><span class="ticon">★</span>
+      <span class="ttext">Places</span>
+      <span class="winbtns"><button class="winbtn" data-win="close" title="Закрыть">×</button></span>
+    </div>
+    <div class="dlgbody">
+      <p>Закреплённые места — диски и папки, кнопки над списком файлов.
+         Сохраняются на сервере (<code>places.json</code>) и видны на любом устройстве.</p>
+      <div class="panebody" id="placesList" style="min-height:140px;max-height:260px"></div>
+      <div class="field"><label for="plName">Name</label>
+        <input type="text" id="plName" spellcheck="false" placeholder="Data"></div>
+      <div class="field"><label for="plPath">Path</label>
+        <input type="text" id="plPath" spellcheck="false" placeholder="/mnt/data"></div>
+      <div class="fail" id="plErr"></div>
+      <div class="dlgbtns">
+        <button class="btn" id="plAdd"><span class="g">+</span> Add</button>
+        <button class="btn" id="plUp"><span class="g">↑</span> Up</button>
+        <button class="btn" id="plDown"><span class="g">↓</span> Down</button>
+        <button class="btn" id="plDel"><span class="g">✗</span> Remove</button>
+        <button class="btn primary" id="plSave">Save</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== ОКНО HELP ===== -->
+  <section class="appwindow" id="winHelp" hidden>
+    <div class="titlebar"><span class="ticon">?</span>
+      <span class="ttext">Keyboard & FTP</span>
+      <span class="winbtns"><button class="winbtn" data-win="close" title="Закрыть">×</button></span>
+    </div>
+    <div class="helptext" id="helpBody"></div>
+  </section>
+
+  <!-- ===== ОБЩИЙ ДИАЛОГ ===== -->
+  <section class="appwindow" id="winDlg" hidden>
+    <div class="titlebar"><span class="ticon">!</span><span class="ttext" id="dlgTitle">Message</span>
+      <span class="winbtns"><button class="winbtn" data-win="close" title="Закрыть">×</button></span>
+    </div>
+    <div class="dlgbody">
+      <p id="dlgText">—</p>
+      <div class="field" id="dlgField" hidden><label for="dlgInput" id="dlgLabel">Name</label>
+        <input type="text" id="dlgInput" spellcheck="false"></div>
+      <div class="fail" id="dlgErr"></div>
+      <div class="dlgbtns">
+        <button class="btn primary" id="dlgOk">OK</button>
+        <button class="btn" id="dlgCancel">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

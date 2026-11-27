@@ -1,0 +1,12 @@
+# создаётся при запуске сервера
+server.pid
+
+# закреплённые места, сохранённые из панели (личные данные)
+places.json
+places.json.tmp
+
+# служебное
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

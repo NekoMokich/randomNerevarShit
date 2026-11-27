@@ -1,0 +1,78 @@
+# =============================================================================
+#  Nerevar FM — systemd unit
+# =============================================================================
+#
+#  УСТАНОВКА (на сервере, от root):
+#
+#    1. Скопируй папку в /opt/nerevar-fm:
+#         mkdir -p /opt/nerevar-fm
+#         cp index.html app.js config.js config.json server.py /opt/nerevar-fm/
+#         chmod 600 /opt/nerevar-fm/config.json      # там пароль!
+#
+#    2. Положи этот файл в /etc/systemd/system/:
+#         cp nerevar-fm.service /etc/systemd/system/
+#
+#    3. Включи автозапуск:
+#         systemctl daemon-reload
+#         systemctl enable --now nerevar-fm
+#
+#    4. Проверка:
+#         systemctl status nerevar-fm
+#         curl http://localhost:8090/            # панель отдаётся
+#         journalctl -u nerevar-fm -f            # логи
+#
+#  ДОСТУП:
+#         панель : http://<ip-сервера>:8090/
+#         FTP    : ftp://nerevar@<ip-сервера>:2121/
+#
+#  ЕСЛИ ПАПКА ЛЕЖИТ В ДРУГОМ МЕСТЕ — поменяй пути в WorkingDirectory
+#  и ExecStart. Порты 8090/2121 не требуют root; порт 80/21 — требуют
+#  (см. блок «ПОРТ 80/21» внизу).
+#
+#  ПРАВА: по умолчанию сервис работает от root — файловый менеджер видит
+#  весь диск (root: "/"). Если нужен доступ только к одной папке, заведи
+#  пользователя и ограничь корень:
+#         User=files
+#         Group=files
+#         ExecStart=/usr/bin/python3 /opt/nerevar-fm/server.py --port 8090 --root /mnt/data
+#
+# =============================================================================
+
+[Unit]
+Description=Nerevar FM - web file manager + FTP
+Documentation=file:///opt/nerevar-fm/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nerevar-fm
+ExecStart=/usr/bin/python3 /opt/nerevar-fm/server.py --port 8090 --ftp-port 2121
+
+# --- Перезапуск при падении -------------------------------------------------
+Restart=on-failure
+RestartSec=3
+
+# --- Изоляция ---------------------------------------------------------------
+# PrivateTmp выключен намеренно: /tmp входит в корень файлового менеджера,
+# и с PrivateTmp сервис и остальная система видели бы разные /tmp.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+
+
+# =============================================================================
+#  ПОРТ 80 / 21 (опционально)
+# =============================================================================
+#  Порт 80 без root:
+#
+#  [Service]
+#  AmbientCapabilities=CAP_NET_BIND_SERVICE
+#  CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+#  ExecStart=/usr/bin/python3 /opt/nerevar-fm/server.py --port 80 --ftp-port 21
+#
+#  Либо один раз выдать capability самому python3 (тогда unit можно не менять):
+#    sudo setcap 'cap_net_bind_service=+ep' "$(readlink -f /usr/bin/python3)"
+#
+# =============================================================================
