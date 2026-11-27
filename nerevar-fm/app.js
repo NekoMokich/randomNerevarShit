@@ -34,9 +34,20 @@ function read(key, dflt) { try { const v = localStorage.getItem(LS + key); retur
 const IMG_EXT = ['png','jpg','jpeg','gif','webp','bmp','avif','apng','ico'];
 const VIDEO_EXT = ['mp4','m4v','webm','ogv','mov','mkv','avi','wmv','flv','3gp','mpeg','mpg'];
 const AUDIO_EXT = ['mp3','wav','ogg','oga','opus','flac','m4a','aac','wma','mid','midi','aiff','aif','amr'];
-const TEXT_EXT = ['txt','md','log','conf','cfg','ini','json','js','css','html','htm','xml','yml','yaml',
-  'py','sh','c','h','cpp','hpp','java','php','rb','go','rs','sql','csv','tsv','diff','patch','desktop',
-  'service','timer','env','rc','list','tex','asc','asciidoc','nfo','diz','srt','vtt','toml','mk','cmake'];
+// Расширения — только подсказка. Настоящий тип определяем по содержимому
+// (см. looksLikeText), поэтому файлы вроде .jsonc, .json5, .env, .properties,
+// .cnf, .toml, .hcl или вообще без расширения открываются как текст.
+const TEXT_EXT = ['txt','text','md','markdown','log','conf','cfg','cnf','config','ini','env','rc',
+  'json','jsonc','json5','jsonl','ndjson','js','mjs','cjs','ts','tsx','jsx','css','scss','less','sass',
+  'html','htm','xml','xsd','xsl','xslt','dtd','svg','yml','yaml','toml','properties','editorconfig',
+  'py','sh','bash','zsh','fish','c','h','cpp','hpp','cc','java','php','rb','go','rs','sql','swift',
+  'kt','kts','scala','lua','pl','r','dart','ex','exs','erl','hs','clj','groovy','gradle','vue','svelte',
+  'graphql','gql','proto','textproto','csv','tsv','diff','patch','rej','orig','desktop','service',
+  'socket','timer','mount','target','rules','list','tex','asc','adoc','asciidoc','rst','org','nfo',
+  'diz','srt','vtt','ics','vcf','reg','inf','url','mk','cmake','ninja','bazel','bzl','tf','tfvars',
+  'hcl','nix','vim','el','asm','bat','cmd','ps1','awk','lock','sum','mod','pem','pub','key','csr'];
+
+const SNIFF_LIMIT = 64 * 1024;   // сколько байт проверяем перед решением «текст/бинарник»
 
 function extOf(name) { const i = name.lastIndexOf('.'); return i > 0 ? name.slice(i + 1).toLowerCase() : ''; }
 
@@ -47,11 +58,106 @@ function fmtSize(n) {
   do { v /= 1024; i++; } while (v >= 1024 && i < u.length - 1);
   return (v >= 10 ? v.toFixed(0) : v.toFixed(1)) + ' ' + u[i];
 }
+// Очередь передач: по строке на файл, плюс общий индикатор сверху.
+// Загрузка идёт кусками через /api/upload/chunk, скачивание — потоком fetch().
+const xfer = {
+  items: new Map(), timer: null,
+  nextId(prefix) { return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); },
+  start(id, title, total, kind) {
+    clearTimeout(this.timer);
+    const it = { id: id, title: title, loaded: 0, total: total || 0,
+      kind: kind || 'transfer', paused: false, cancel: null, onPause: null, onResume: null };
+    this.items.set(id, it);
+    const row = document.createElement('div');
+    row.className = 'xrow'; row.dataset.xferId = id;
+    row.innerHTML = '<span class="xname"></span><span class="xpct"></span>' +
+      '<span class="xinfo"></span><span class="xbtns">' +
+      '<button class="xbtn" data-xfer-act="pause">Pause</button>' +
+      '<button class="xbtn" data-xfer-act="cancel">Cancel</button></span>';
+    $('.xname', row).textContent = title;
+    const list = $('#xferList');
+    if (list) list.appendChild(row);
+    it.row = row;
+    this.render();
+    return it;
+  },
+  get(id) { return this.items.get(id) || null; },
+  update(id, loaded, total) {
+    const it = this.items.get(id);
+    if (!it) return;
+    it.loaded = loaded || 0;
+    if (total) it.total = total;
+    this.render();
+  },
+  finish(id) {
+    const it = this.items.get(id);
+    if (it && it.row && it.row.parentNode) it.row.parentNode.removeChild(it.row);
+    this.items.delete(id);
+    if (this.items.size) { this.render(); return; }
+    this.timer = setTimeout(() => {
+      const el = $('#xfer');
+      if (el && !this.items.size) el.hidden = true;
+    }, 800);
+  },
+  setPaused(id, paused) {
+    const it = this.items.get(id);
+    if (!it) return;
+    it.paused = paused;
+    if (paused && it.onPause) it.onPause();
+    if (!paused && it.onResume) it.onResume();
+    this.render();
+  },
+  cancel(id) {
+    const it = this.items.get(id);
+    if (!it) return;
+    if (it.cancel) { try { it.cancel(); } catch (e) {} }
+    this.finish(id);
+  },
+  render() {
+    const el = $('#xfer');
+    if (!el) return;
+    const list = Array.from(this.items.values());
+    el.hidden = !list.length;
+    if (!list.length) return;
+    let loaded = 0, total = 0;
+    list.forEach(it => {
+      loaded += it.loaded; total += it.total;
+      if (!it.row) return;
+      const pct = it.total ? Math.min(100, Math.round(it.loaded / it.total * 100)) : 0;
+      $('.xpct', it.row).textContent = (it.paused ? '❚❚ ' : '') + pct + '%';
+      $('.xinfo', it.row).textContent = fmtSize(it.loaded) + (it.total ? ' / ' + fmtSize(it.total) : '') +
+        (it.paused ? ' · paused' : '');
+      $('[data-xfer-act="pause"]', it.row).textContent = it.paused ? 'Resume' : 'Pause';
+    });
+    const pct = total ? Math.min(100, Math.round(loaded / total * 100)) : 0;
+    $('#xferTitle').textContent = list.length === 1 ? list[0].title : list.length + ' transfers';
+    $('#xferFill').style.width = pct + '%';
+    $('#xferPct').textContent = pct + '%';
+    $('#xferInfo').textContent = fmtSize(loaded) + (total ? ' / ' + fmtSize(total) : '');
+  }
+};
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-xfer-act]');
+  if (!b) return;
+  const row = b.closest('[data-xfer-id]');
+  if (!row) return;
+  const id = row.dataset.xferId, it = xfer.get(id);
+  if (!it) return;
+  e.stopPropagation();
+  if (b.dataset.xferAct === 'cancel') xfer.cancel(id);
+  else if (b.dataset.xferAct === 'pause') xfer.setPaused(id, !it.paused);
+});
+
 function pad(n) { return (n < 10 ? '0' : '') + n; }
 function fmtDate(ts) {
   const d = new Date(ts * 1000);
   return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
          ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+function fmtTs(ts) {
+  if (typeof ts !== 'number') return String(ts || '');
+  return fmtDate(ts > 1e12 ? ts / 1000 : ts);   // сервер может прислать секунды или мс
 }
 function joinPath(dir, name) {
   dir = (dir || '/').replace(/\/+$/, '') || '/';
@@ -75,6 +181,15 @@ function cleanName(s) {
 
 /* ===== 2. API ========================================================== */
 let TOKEN = (function () { try { return sessionStorage.getItem(LS + 'token') || ''; } catch (e) { return ''; } })();
+let ROLE = (function () { try { return sessionStorage.getItem(LS + 'role') || 'admin'; } catch (e) { return 'admin'; } })();
+let READ_ONLY = false, SESSION_TTL = 0, SERVER_VERSION = '', FTP_PASSIVE = '';
+// действия, которые меняют состояние сервера: в режиме view их не вызываем
+const MUTATING = new Set(['mkdir', 'newfile', 'rename', 'batch', 'delete', 'paste', 'undo',
+  'redo', 'upload', 'pin', 'toother', 'moveother', 'touch', 'chmod', 'archiveCreate',
+  'archiveExtract', 'trashRestore', 'trashPurge', 'trashsel', 'saveText', 'saveAs']);
+function readOnlyMode() { return READ_ONLY || ROLE === 'view'; }
+function blockMutating() { status('Read-only mode: changes are disabled', true); return false; }
+function canMutate() { return !readOnlyMode() || blockMutating(); }
 
 function apiUrl(path, extra) {
   const u = new URL(path, location.origin);
@@ -243,6 +358,7 @@ function closeWin(id) {
     confirmBox('Discard unsaved changes in ' + baseName(v.path) + '?', 'Viewer').then(ok => {
       if (!ok) return;
       v.dirty = false;
+      clearDraft(v);
       updateViewerUI(v);
       closeWin(id);
     });
@@ -348,16 +464,23 @@ function startResize(e, el) {
 /* ===== 5. МЕНЮ ========================================================= */
 function closeMenus() { $$('.menuitem.open').forEach(m => m.classList.remove('open')); }
 function initMenus() {
-  $$('.menuitem').forEach(mi => {
-    mi.addEventListener('click', e => {
-      if (e.target.closest('.menu')) return;
-      const was = mi.classList.contains('open');
-      closeMenus();
-      if (!was) mi.classList.add('open');
-    });
-    mi.addEventListener('mouseenter', () => {
-      if ($('.menuitem.open')) { closeMenus(); mi.classList.add('open'); }
-    });
+  // Делегирование на document: окна Viewer создаются клонированием разметки,
+  // поэтому навешивать обработчики на каждый .menuitem заранее нельзя —
+  // у клонов меню File/View просто не открывалось.
+  document.addEventListener('click', e => {
+    const mi = e.target.closest('.menuitem');
+    if (!mi) return;
+    if (e.target.closest('.menu')) return;   // клик по пункту меню — это action
+    const was = mi.classList.contains('open');
+    closeMenus();
+    if (!was) mi.classList.add('open');
+  });
+  document.addEventListener('mouseover', e => {
+    const mi = e.target.closest('.menuitem');
+    if (!mi || !$('.menuitem.open')) return;
+    if (mi.classList.contains('open')) return;
+    closeMenus();
+    mi.classList.add('open');
   });
   document.addEventListener('mousedown', e => { if (!e.target.closest('.menuitem')) closeMenus(); });
 }
@@ -412,7 +535,11 @@ async function doLogin() {
     let data = null; try { data = await res.json(); } catch (e) {}
     if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
     TOKEN = data.token;
-    try { sessionStorage.setItem(LS + 'token', TOKEN); } catch (e) {}
+    ROLE = (data && data.role) || 'admin';
+    try {
+      sessionStorage.setItem(LS + 'token', TOKEN);
+      sessionStorage.setItem(LS + 'role', ROLE);
+    } catch (e) {}
     $('#loginPass').value = '';
     hideWin('winLogin');
     afterLogin();
@@ -423,12 +550,15 @@ async function doLogin() {
 }
 function showLogin(reason) {
   closeMenus();
+  ROLE = 'admin'; READ_ONLY = false; updateModeBadge();
   openWin('winLogin', true);
   $('#loginErr').textContent = reason || '';
   // оболочка остаётся на экране, но под затемнением и без нажатий
   scene.classList.add('locked');
   allViewers().forEach(v => { stopViewerMedia(v); v.dirty = false; hideWin(v.id); opened[v.id] = false; });
   hideWin('winHelp'); hideWin('winPlaces');
+  ['winSearch', 'winBatch', 'winArchive', 'winProps', 'winTrash', 'winAudit', 'winSettings']
+    .forEach(id => { hideWin(id); opened[id] = false; });
   setTimeout(() => $('#loginPass').focus(), 30);
 }
 $('#loginBtn').addEventListener('click', doLogin);
@@ -444,9 +574,17 @@ async function afterLogin() {
     const st = await api('/api/status');
     if (st && st.ftp && st.ftp.port) FTP_PORT = st.ftp.port;
     if (st && st.ftp && st.ftp.user) FTP_USER = st.ftp.user;
+    FTP_PASSIVE = (st && st.ftp && (st.ftp.passivePorts || st.ftp.passiveRange || st.ftp.passive)) || '';
+    READ_ONLY = !!(st && st.readOnly);
+    if (st && st.role) ROLE = st.role;
+    if (st && st.sessionTtl !== undefined) SESSION_TTL = st.sessionTtl;
+    if (st && st.version) SERVER_VERSION = st.version;
+    try { sessionStorage.setItem(LS + 'role', ROLE); } catch (e) {}
   } catch (e) {}
   buildHelp();          // порт FTP известен только теперь — пересобрать справку
+  updateModeBadge();
   updateStatus();
+  renderSettingsInfo();
 }
 
 /* ===== 8. ЗАКРЕПЛЁННЫЕ МЕСТА ========================================== */
@@ -490,6 +628,7 @@ async function savePlaces() {
   renderPlaces();
 }
 async function pinCurrent() {
+  if (!canMutate()) return;
   const p = active().path;
   if (PLACES.some(x => x.path === p)) { notice('Already pinned: ' + p); return; }
   const name = await promptBox('Name for this place:', baseName(p) || 'Root');
@@ -551,8 +690,8 @@ let activeSide = 'left';
 const clip = { mode: null, items: [] };   // буфер обмена: cut | copy
 
 const panes = {
-  left:  { side: 'left',  path: '/', entries: [], sel: new Set(), cursor: null, hist: [], back: [], fwd: [], navClickAt: 0 },
-  right: { side: 'right', path: '/', entries: [], sel: new Set(), cursor: null, hist: [], back: [], fwd: [], navClickAt: 0 }
+  left:  { side: 'left',  path: '/', entries: [], sel: new Set(), cursor: null, filter: '', hist: [], back: [], fwd: [], navClickAt: 0 },
+  right: { side: 'right', path: '/', entries: [], sel: new Set(), cursor: null, filter: '', hist: [], back: [], fwd: [], navClickAt: 0 }
 };
 const active = () => panes[activeSide];
 const other = () => panes[activeSide === 'left' ? 'right' : 'left'];
@@ -607,6 +746,11 @@ const refreshBoth = () => Promise.all([refresh('left'), refresh('right')]);
 function visibleEntries(p) {
   let list = p.entries.slice();
   if (!showHidden) list = list.filter(e => !e.hidden);
+  // фильтр панели влияет и на строки, и на счётчик, и на диапазоны выделения
+  if (p.filter) {
+    const q = p.filter.toLowerCase();
+    list = list.filter(e => e.name.toLowerCase().indexOf(q) >= 0);
+  }
   const cmp = {
     name: (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }),
     size: (a, b) => a.size - b.size,
@@ -627,6 +771,8 @@ function renderPane(side) {
   el.classList.toggle('focused', side === activeSide);
   const inp = $('[data-path]', el);
   if (document.activeElement !== inp) inp.value = p.path;
+  const fi = $('[data-filter]', el);
+  if (fi && document.activeElement !== fi && fi.value !== p.filter) fi.value = p.filter;
   const backBtn = $('[data-nav="back"]', el), fwdBtn = $('[data-nav="forward"]', el);
   if (backBtn) backBtn.disabled = !p.back.length;
   if (fwdBtn) fwdBtn.disabled = !p.fwd.length;
@@ -801,6 +947,36 @@ function initPanes() {
       const global = e.ctrlKey || e.metaKey || e.altKey || /^F\d+$/.test(e.key);
       if (!global) e.stopPropagation();
     });
+
+    /* --- быстрый фильтр в панели --------------------------------------- */
+    const filterInp = $('[data-filter]', el);
+    if (filterInp) {
+      filterInp.addEventListener('input', () => {
+        panes[side].filter = filterInp.value;
+        panes[side].sel = new Set(); panes[side].cursor = null;
+        renderPane(side); updateStatus();
+      });
+      filterInp.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+          e.preventDefault(); e.stopPropagation();
+          filterInp.value = ''; panes[side].filter = '';
+          panes[side].sel = new Set(); panes[side].cursor = null;
+          renderPane(side); updateStatus();
+        } else if (e.key === 'Enter') {
+          e.preventDefault(); e.stopPropagation();
+          const vis = visibleEntries(panes[side]);
+          if (vis.length) { selectRow(side, vis[0].name, 'single'); $('[data-body]', el).focus(); }
+        } else if (!e.ctrlKey && !e.metaKey && !e.altKey && !/^F\d+$/.test(e.key)) e.stopPropagation();
+      });
+      filterInp.addEventListener('mousedown', () => setActiveSide(side));
+    }
+    const fclear = $('[data-filter-clear]', el);
+    if (fclear) fclear.addEventListener('click', () => {
+      panes[side].filter = '';
+      if (filterInp) filterInp.value = '';
+      panes[side].sel = new Set(); panes[side].cursor = null;
+      renderPane(side); updateStatus(); setActiveSide(side);
+    });
     $$('.listhead span', el).forEach(h => h.addEventListener('click', () => {
       if (sortKey === h.dataset.sort) sortDir = -sortDir; else { sortKey = h.dataset.sort; sortDir = 1; }
       updateMarks(); renderPanes();
@@ -832,7 +1008,7 @@ function initPanes() {
       e.preventDefault();
       el.classList.remove('dragover');
       const files = e.dataTransfer.files;
-      if (files && files.length) { uploadFiles(files, panes[side].path); return; }
+      if (files && files.length) { uploadDrop(e.dataTransfer, panes[side].path); return; }
       let payload = null;
       try { payload = JSON.parse(e.dataTransfer.getData('application/x-fm')); } catch (err) {}
       if (!payload || !payload.names) return;
@@ -860,7 +1036,7 @@ function needSel() {
   return paths;
 }
 async function transfer(items, dest, mode) {
-  if (!items.length) return;
+  if (!items.length || !canMutate()) return;
   const isMove = mode === 'move';
   try {
     const d = await api(isMove ? '/api/move' : '/api/copy', { method: 'POST', body: { items: items, dest: dest } });
@@ -878,10 +1054,12 @@ async function transfer(items, dest, mode) {
 async function actCopy() { const p = needSel(); if (!p) return; clip.mode = 'copy'; clip.items = p; status('Copied to buffer: ' + p.length); renderPanes(); }
 async function actCut()  { const p = needSel(); if (!p) return; clip.mode = 'cut';   clip.items = p; status('Cut to buffer: ' + p.length);   renderPanes(); }
 async function actPaste() {
+  if (!canMutate()) return;
   if (!clip.items.length) { status('Buffer is empty', true); return; }
   await transfer(clip.items, active().path, clip.mode === 'cut' ? 'move' : 'copy');
 }
 async function actUndo() {
+  if (!canMutate()) return;
   try {
     const d = await api('/api/undo', { method: 'POST', body: {} });
     const errs = (d && d.errors) || [];
@@ -895,6 +1073,7 @@ async function actUndo() {
   } catch (e) { status('Cannot undo: ' + e.message, true); }
 }
 async function actDelete() {
+  if (!canMutate()) return;
   const paths = needSel(); if (!paths) return;
   if (FM.confirmDelete !== false) {
     const ok = await confirmBox('Delete ' + paths.length + ' item(s)?\n\n' + paths.map(baseName).join(', '), 'Delete');
@@ -909,6 +1088,7 @@ async function actDelete() {
   } catch (e) { status('Cannot delete: ' + e.message, true); }
 }
 async function actRename() {
+  if (!canMutate()) return;
   const paths = needSel(); if (!paths || paths.length !== 1) { status('Select exactly one item', true); return; }
   const from = paths[0];
   const to = await promptBox('New name:', baseName(from), 'Rename');
@@ -923,6 +1103,7 @@ async function actRename() {
   } catch (e) { status('Cannot rename: ' + e.message, true); }
 }
 async function actMkdir() {
+  if (!canMutate()) return;
   const name = await promptBox('New folder name:', '', 'New folder');
   if (name === null) return;
   const n = cleanName(name);
@@ -934,6 +1115,7 @@ async function actMkdir() {
   } catch (e) { status('Cannot create folder: ' + e.message, true); }
 }
 async function actNewFile() {
+  if (!canMutate()) return;
   const name = await promptBox('New file name:', '', 'New file');
   if (name === null) return;
   const n = cleanName(name);
@@ -969,10 +1151,20 @@ function actDownload() {
   status(msg, sel.folders.length > 0 || sel.files.length > files.length);
   files.forEach((p, i) => setTimeout(() => triggerDownload(p), i * 400));
 }
-async function triggerDownload(path) {
+async function triggerDownload(path, existingId) {
+  const it = existingId ? xfer.get(existingId) :
+    xfer.start(xfer.nextId('dl'), 'Downloading ' + baseName(path), 0, 'download');
+  if (!it) return;
+  const id = it.id;
+  it.path = path; it.cancelled = false; it.restarting = false; it.loaded = 0;
+  const controller = new AbortController();
+  it.controller = controller;
+  it.cancel = () => { it.cancelled = true; controller.abort(); };
+  it.onPause = () => { it.restarting = true; controller.abort(); };
+  it.onResume = () => { if (it.restarting) triggerDownload(path, id); };
   try {
     const res = await fetch(apiUrl('/api/download', { path: path }), {
-      headers: TOKEN ? { 'X-Auth-Token': TOKEN } : {}
+      headers: TOKEN ? { 'X-Auth-Token': TOKEN } : {}, signal: controller.signal
     });
     if (res.status === 401) { showLogin('Session expired — enter the password again'); return; }
     if (!res.ok) {
@@ -984,7 +1176,31 @@ async function triggerDownload(path) {
       status('Cannot download ' + baseName(path) + ': ' + (err || ('HTTP ' + res.status)), true);
       return;
     }
-    const blob = await res.blob();
+    const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
+    if (total) xfer.update(id, 0, total);
+
+    // Читаем поток кусками, чтобы показывать реальный прогресс, а не ждать
+    // готового blob. В старых браузерах падаем обратно на res.blob().
+    let blob;
+    if (res.body && res.body.getReader) {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let loaded = 0;
+      for (;;) {
+        const step = await reader.read();
+        if (step.done) break;
+        if (step.value && step.value.length) {
+          chunks.push(step.value);
+          loaded += step.value.length;
+          xfer.update(id, loaded, total || loaded);
+        }
+      }
+      blob = new Blob(chunks);
+    } else {
+      blob = await res.blob();
+    }
+    xfer.update(id, blob.size, blob.size || total);
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -992,39 +1208,614 @@ async function triggerDownload(path) {
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   } catch (e) {
-    status('Cannot download ' + baseName(path) + ': ' + e.message, true);
+    if (!it.restarting && !it.cancelled) status('Cannot download ' + baseName(path) + ': ' + e.message, true);
+  } finally {
+    if (!it.restarting) xfer.finish(id);
   }
 }
+
+/* ===== 11a. ОЧЕРЕДЬ ЗАГРУЗКИ (куски по 1 МиБ) ========================= */
+const UPLOAD_CHUNK = 1024 * 1024;
+const uploadQueue = [];
+let uploadRunning = false;
+const sleep = ms => new Promise(res => setTimeout(res, ms));
+function uploadId() {
+  try {
+    const a = new Uint8Array(16);
+    (window.crypto || window.msCrypto).getRandomValues(a);
+    return Array.prototype.map.call(a, b => ('0' + b.toString(16)).slice(-2)).join('');
+  } catch (e) {
+    return Date.now().toString(16) + Math.random().toString(16).slice(2);
+  }
+}
+// Обёртка: каждому файлу — отдельная строка в очереди. rel — путь внутри
+// перетащенной папки, сервер принимает безопасные подпути в name.
 function uploadFiles(files, dir) {
-  if (!files || !files.length) return;
-  const form = new FormData();
-  for (let i = 0; i < files.length; i++) form.append('file', files[i], files[i].name);
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST', apiUrl('/api/upload', { path: dir }));
-  if (TOKEN) xhr.setRequestHeader('X-Auth-Token', TOKEN);
-  const prog = $('#upProg'), bar = $('#upProg i');
-  prog.classList.add('on'); bar.style.width = '0%';
-  xhr.upload.onprogress = e => { if (e.lengthComputable) bar.style.width = Math.round(e.loaded / e.total * 100) + '%'; };
-  const done = ok => {
-    setTimeout(() => { prog.classList.remove('on'); bar.style.width = '0%'; }, 600);
-    if (ok) { refreshBoth(); status('Uploaded ' + files.length + ' file(s) → ' + dir); }
+  if (readOnlyMode()) { blockMutating(); return; }
+  if (!files || !files.length) { runUploadQueue(); return; }
+  Array.prototype.forEach.call(files, f => uploadQueue.push({ file: f, dir: dir, rel: f.rel || f.webkitRelativePath || f.name }));
+  runUploadQueue();
+}
+async function runUploadQueue() {
+  if (uploadRunning) return;
+  uploadRunning = true;
+  while (uploadQueue.length) {
+    const job = uploadQueue.shift();
+    try { await doChunkedUpload(job); }
+    catch (e) { status('Upload failed: ' + (e.message || e), true); }
+  }
+  uploadRunning = false;
+}
+async function doChunkedUpload(job) {
+  const file = job.file, dir = job.dir, name = job.rel;
+  const id = xfer.nextId('up');
+  const it = xfer.start(id, 'Uploading ' + (name || file.name), file.size || 0, 'upload');
+  const uid = uploadId(), total = file.size || 0;
+  it.cancelled = false;
+  it.cancel = () => { it.cancelled = true; if (it.controller) it.controller.abort(); };
+  let offset = 0, sent = false;
+  it.resumePromise = null;
+  it.onResume = () => {
+    // после паузы уточняем, что реально попало на сервер
+    it.resumePromise = (async () => {
+      try {
+        const r = await fetch(apiUrl('/api/upload/status', { uploadId: uid }), {
+          headers: TOKEN ? { 'X-Auth-Token': TOKEN } : {}
+        });
+        if (r.ok) {
+          const d = await r.json();
+          if (d && typeof d.offset === 'number' && d.offset >= offset && d.offset <= total) offset = d.offset;
+        }
+      } catch (e) {}
+    })();
   };
-  xhr.onload = () => {
-    let d = null; try { d = JSON.parse(xhr.responseText); } catch (e) {}
-    if (xhr.status >= 200 && xhr.status < 300) {
-      const errs = (d && d.errors) || [];
-      if (errs.length) { status('Upload: ' + errs.length + ' failed', true); notice(errs.map(e => e.name + ' — ' + e.error).join('\n'), 'Upload failed'); done(false); }
-      else done(true);
-    } else { status('Upload failed: ' + ((d && d.error) || xhr.status), true); done(false); }
-  };
-  xhr.onerror = () => { status('Upload failed: host unreachable', true); done(false); };
-  xhr.send(form);
-  status('Uploading ' + files.length + ' file(s)…');
+  try {
+    const st = await fetch(apiUrl('/api/upload/status', { uploadId: uid }), {
+      headers: TOKEN ? { 'X-Auth-Token': TOKEN } : {}
+    });
+    if (st.ok) {
+      const d = await st.json();
+      if (d && d.uploadId === uid && d.offset > 0 && d.offset <= total) offset = d.offset;
+    }
+    xfer.update(id, offset, total);
+  } catch (e) {}
+  while ((offset < total || !sent) && !it.cancelled) {
+    while (it.paused && !it.cancelled) await sleep(200);
+    if (it.resumePromise) { await it.resumePromise; it.resumePromise = null; }
+    if (it.cancelled) break;
+    sent = true;   // пустой файл тоже отправляем одним (пустым) куском
+    const end = Math.min(offset + UPLOAD_CHUNK, total);
+    const controller = new AbortController();
+    it.controller = controller;
+    try {
+      const res = await fetch(apiUrl('/api/upload/chunk', {
+        path: dir, uploadId: uid, offset: offset, total: total, name: name
+      }), {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/octet-stream' },
+          TOKEN ? { 'X-Auth-Token': TOKEN } : {}),
+        body: file.slice(offset, end), signal: controller.signal
+      });
+      if (res.status === 401) { showLogin('Session expired — enter the password again'); it.cancelled = true; break; }
+      if (!res.ok) {
+        let err = ''; try { err = ((await res.json()).error) || ''; } catch (e) {}
+        throw new Error(err || ('HTTP ' + res.status));
+      }
+      const d = await res.json();
+      if (d.complete) { offset = total; xfer.update(id, total, total); break; }
+      offset = (d && typeof d.offset === 'number') ? d.offset : end;
+      if (!total) break;
+      xfer.update(id, offset, total);
+    } catch (e) {
+      if (it.cancelled || controller.signal.aborted) break;
+      // сеть дрогнула — спрашиваем сервер, где он остановился, и продолжаем
+      try {
+        const st = await fetch(apiUrl('/api/upload/status', { uploadId: uid }), {
+          headers: TOKEN ? { 'X-Auth-Token': TOKEN } : {}
+        });
+        if (st.ok) {
+          const d = await st.json();
+          if (d && typeof d.offset === 'number' && d.offset >= offset && d.offset <= total) { offset = d.offset; continue; }
+        }
+      } catch (e2) {}
+      throw e;
+    }
+  }
+  if (it.cancelled) {
+    try {
+      await fetch(apiUrl('/api/upload/cancel', { uploadId: uid }), {
+        method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' },
+          TOKEN ? { 'X-Auth-Token': TOKEN } : {}), body: '{}'
+      });
+    } catch (e) {}
+    xfer.finish(id);
+    return;
+  }
+  xfer.update(id, total, total);
+  await refreshBoth();
+  status('Uploaded: ' + (name || file.name));
+  setTimeout(() => xfer.finish(id), 400);
+}
+
+/* Перетаскивание файлов с диска: обходим entry-деревья, сохраняя rel. */
+function entryFiles(entry, prefix, out) {
+  return new Promise(resolve => {
+    if (!entry) return resolve();
+    if (entry.isFile) {
+      entry.file(file => { file.rel = prefix + entry.name; out.push(file); resolve(); }, () => resolve());
+      return;
+    }
+    if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const all = [];
+      const readMore = () => reader.readEntries(entries => {
+        if (!entries.length) {
+          Promise.all(all.map(sub => entryFiles(sub, prefix + entry.name + '/', out))).then(() => resolve());
+          return;
+        }
+        Array.prototype.push.apply(all, entries);
+        readMore();
+      }, () => resolve());
+      readMore();
+      return;
+    }
+    resolve();
+  });
+}
+async function uploadDrop(dt, dir) {
+  const items = dt && dt.items;
+  if (items && items.length && items[0].webkitGetAsEntry) {
+    const out = [];
+    for (let i = 0; i < items.length; i++) {
+      const entry = items[i].webkitGetAsEntry();
+      if (entry) await entryFiles(entry, '', out);
+    }
+    if (out.length) { uploadFiles(out, dir); return; }
+  }
+  uploadFiles(dt.files, dir);
 }
 $('#fileInput').addEventListener('change', e => {
   if (e.target.files.length) uploadFiles(e.target.files, active().path);
   e.target.value = '';
 });
+
+/* ===== 10a. ПОИСК, ПАКЕТ, АРХИВЫ, СВОЙСТВА =========================== */
+async function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+  }
+  // запасной путь для http:// и старых браузеров
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+  document.body.appendChild(ta); ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) {}
+  ta.remove();
+  return ok;
+}
+async function actCopyPath() {
+  const p = needSel(); if (!p) return;
+  const ok = await copyText(p.join('\n'));
+  status(ok ? 'Copied path(s): ' + p.length : 'Cannot copy', !ok);
+}
+async function actCopyName() {
+  const p = needSel(); if (!p) return;
+  const ok = await copyText(p.map(baseName).join('\n'));
+  status(ok ? 'Copied name(s): ' + p.length : 'Cannot copy', !ok);
+}
+async function actTouch() {
+  const items = needSel(); if (!items || readOnlyMode()) { if (readOnlyMode()) blockMutating(); return; }
+  try {
+    const d = await api('/api/touch', { method: 'POST', body: { items: items, mtime: null, atime: null } });
+    await refreshBoth();
+    const errs = (d && d.errors) || [];
+    if (errs.length) notice(errs.map(e => (e.path || '') + ' — ' + e.error).join('\n'), 'Touch failed');
+    status('Touched: ' + ((d && d.touched) || items.length));
+  } catch (e) { status('Cannot touch: ' + e.message, true); }
+}
+async function actChmod() {
+  const items = needSel(); if (!items || readOnlyMode()) { if (readOnlyMode()) blockMutating(); return; }
+  const mode = await promptBox('New mode (e.g. 0755):', '0755', 'Permissions');
+  if (mode === null) return;
+  if (!/^[0-7]{3,4}$/.test(mode.trim())) { status('Invalid mode', true); return; }
+  try {
+    const d = await api('/api/chmod', { method: 'POST',
+      body: { items: items, mode: mode.trim().padStart(4, '0'), recursive: false } });
+    await refreshBoth();
+    const errs = (d && d.errors) || [];
+    if (errs.length) notice(errs.map(e => (e.path || '') + ' — ' + e.error).join('\n'), 'Chmod failed');
+    status('Changed: ' + ((d && d.changed) || items.length));
+  } catch (e) { status('Cannot chmod: ' + e.message, true); }
+}
+async function actTrashSelection() {
+  const items = needSel(); if (!items || readOnlyMode()) { if (readOnlyMode()) blockMutating(); return; }
+  if (FM.confirmDelete !== false) {
+    const ok = await confirmBox('Move ' + items.length + ' item(s) to trash?', 'Trash');
+    if (!ok) return;
+  }
+  try {
+    const d = await api('/api/delete', { method: 'POST', body: { items: items, trash: true } });
+    await refreshBoth();
+    const errs = (d && d.errors) || [];
+    if (errs.length) notice(errs.map(e => baseName(e.path || '') + ' — ' + e.error).join('\n'), 'Trash failed');
+    status('Trashed: ' + ((d && d.trashed) || items.length));
+  } catch (e) { status('Cannot move to trash: ' + e.message, true); }
+}
+
+/* --- поиск -------------------------------------------------------------- */
+let searchRows = [];
+function openSearch() {
+  $('#searchPath').value = active().path;
+  $('#searchInfo').textContent = '';
+  openWin('winSearch');
+  $('#searchQ').focus();
+}
+async function runSearch() {
+  const q = $('#searchQ').value.trim();
+  if (!q) { status('Enter a search query', true); return; }
+  const info = $('#searchInfo');
+  info.textContent = 'Searching…';
+  const qs = ['path=' + encodeURIComponent($('#searchPath').value.trim() || '/'),
+    'q=' + encodeURIComponent(q),
+    'mode=' + encodeURIComponent($('#searchMode').value),
+    'regex=' + ($('#searchRegex').checked ? '1' : '0'),
+    'hidden=' + ($('#searchHidden').checked ? '1' : '0'), 'limit=500'].join('&');
+  try {
+    const d = await api('/api/search?' + qs);
+    searchRows = (d && d.results) || [];
+    const box = $('#searchResults'); box.textContent = '';
+    searchRows.forEach(r => {
+      const row = document.createElement('div');
+      row.className = 'datarow four'; row.dataset.path = r.path; row.title = r.path;
+      const p = document.createElement('span'); p.textContent = r.path;
+      const s = document.createElement('span'); s.className = 'dim'; s.textContent = r.dir ? '<DIR>' : fmtSize(r.size);
+      const t = document.createElement('span'); t.textContent = r.line ? 'line ' + r.line + ': ' + (r.text || '') : (r.name || baseName(r.path));
+      const k = document.createElement('span'); k.className = 'dim'; k.textContent = r.dir ? 'dir' : baseName(r.path);
+      row.appendChild(p); row.appendChild(s); row.appendChild(t); row.appendChild(k);
+      box.appendChild(row);
+    });
+    if (!searchRows.length) {
+      const e = document.createElement('div'); e.className = 'datarow simple dim';
+      e.textContent = 'Nothing found'; box.appendChild(e);
+    }
+    info.textContent = searchRows.length + ' result(s)' + (d && d.truncated ? ' — truncated (limit 500)' : '');
+  } catch (e) { info.textContent = 'Search failed: ' + e.message; status('Search failed: ' + e.message, true); }
+}
+async function openSearchResult(row) {
+  const path = row.dataset.path;
+  if (!path) return;
+  const r = searchRows.find(x => x.path === path);
+  if (!r || !r.dir) { viewFile(path); return; }
+  // папку показываем в другой панели: переходим в родителя и выделяем её
+  const side = activeSide === 'left' ? 'right' : 'left';
+  await go(side, parentOf(path) || '/');
+  const p = panes[side], name = baseName(path);
+  if (p.entries.some(e => e.name === name)) { p.sel = new Set([name]); p.cursor = name; }
+  renderPane(side); updateStatus();
+}
+document.addEventListener('dblclick', e => {
+  const r = e.target.closest('#searchResults .datarow[data-path]');
+  if (r) openSearchResult(r);
+});
+document.addEventListener('click', e => {
+  const r = e.target.closest('#searchResults .datarow[data-path]');
+  if (!r) return;
+  $$('#searchResults .datarow').forEach(x => x.classList.remove('sel'));
+  r.classList.add('sel');
+});
+
+/* --- пакетное переименование ------------------------------------------- */
+function batchTargets() { return selPaths(activeSide); }
+function batchNewName(name, i) {
+  const pat = $('#batchPattern').value.trim();
+  const ext = extOf(name), stem = ext ? name.slice(0, -(ext.length + 1)) : name;
+  if (pat) {
+    const start = parseInt($('#batchStart').value, 10) || 0;
+    return pat.replace(/\{n\}/g, String(start + i)).replace(/\{name\}/g, name)
+      .replace(/\{stem\}/g, stem).replace(/\{ext\}/g, ext ? '.' + ext : '');
+  }
+  const find = $('#batchFind').value;
+  const rep = $('#batchReplace').value;
+  return find ? name.split(find).join(rep) : name;
+}
+function batchPlan() {
+  return batchTargets().map((from, i) => {
+    const name = baseName(from), to = joinPath(parentOf(from) || active().path, batchNewName(name, i));
+    return { from: from, to: to, name: name, newName: baseName(to) };
+  });
+}
+function renderBatchPreview() {
+  const box = $('#batchPreview'); box.textContent = '';
+  const plan = batchPlan();
+  plan.forEach(x => {
+    const r = document.createElement('div'); r.className = 'datarow two';
+    const a = document.createElement('span'); a.textContent = x.name;
+    const b = document.createElement('span'); b.textContent = (x.from === x.to ? '= ' : '→ ') + x.newName;
+    if (x.from === x.to) b.className = 'dim';
+    r.appendChild(a); r.appendChild(b); box.appendChild(r);
+  });
+  if (!plan.length) {
+    const e = document.createElement('div'); e.className = 'datarow simple dim';
+    e.textContent = 'Nothing selected'; box.appendChild(e);
+  }
+  $('#batchInfo').textContent = plan.length + ' item(s)';
+}
+function openBatch() {
+  if (!batchTargets().length) { status('Nothing selected', true); return; }
+  renderBatchPreview(); openWin('winBatch');
+}
+async function actBatchApply() {
+  if (readOnlyMode()) { blockMutating(); return; }
+  const items = batchPlan().filter(x => x.from !== x.to).map(x => ({ from: x.from, to: x.to }));
+  if (!items.length) { status('No changes to apply', true); return; }
+  try {
+    const d = await api('/api/batchrename', { method: 'POST', body: { items: items } });
+    await refreshBoth();
+    const errs = (d && d.errors) || [];
+    if (errs.length) notice(errs.map(e => (e.path || '') + ' — ' + e.error).join('\n'), 'Batch rename failed');
+    status('Renamed: ' + ((d && d.renamed) || items.length));
+  } catch (e) { status('Cannot batch rename: ' + e.message, true); }
+}
+
+/* --- архивы ------------------------------------------------------------- */
+function openArchive() {
+  const sel = selPaths(activeSide);
+  $('#arcPath').value = sel.length === 1 ? sel[0] : '';
+  $('#arcDest').value = other().path;
+  const bn = baseName(active().path);
+  $('#arcName').value = sel.length && bn && bn !== '/' ? bn + '.zip' : 'archive.zip';
+  $('#arcList').textContent = ''; $('#arcInfo').textContent = '';
+  openWin('winArchive');
+}
+async function archiveBrowse() {
+  const path = $('#arcPath').value.trim() || selPaths(activeSide)[0];
+  if (!path) { status('Choose an archive', true); return; }
+  try {
+    const d = await api('/api/archive/list?path=' + encodeURIComponent(path));
+    const box = $('#arcList'); box.textContent = '';
+    (d && d.entries || []).forEach(en => {
+      const r = document.createElement('div'); r.className = 'datarow two';
+      const a = document.createElement('span'); a.textContent = en.name;
+      const b = document.createElement('span'); b.className = 'dim';
+      b.textContent = en.dir ? '<DIR>' : fmtSize(en.size);
+      r.appendChild(a); r.appendChild(b); box.appendChild(r);
+    });
+    if (!box.children.length) box.innerHTML = '<div class="datarow simple dim">Empty archive</div>';
+    $('#arcInfo').textContent = (d && d.format ? d.format + ' · ' : '') + ((d && d.entries || []).length) + ' entries';
+  } catch (e) { $('#arcInfo').textContent = 'Cannot list: ' + e.message; status('Cannot list archive: ' + e.message, true); }
+}
+async function archiveExtract() {
+  if (readOnlyMode()) { blockMutating(); return; }
+  const archive = $('#arcPath').value.trim() || selPaths(activeSide)[0];
+  const dest = $('#arcDest').value.trim() || other().path;
+  if (!archive) { status('Choose an archive', true); return; }
+  try {
+    const d = await api('/api/archive/extract', { method: 'POST',
+      body: { archive: archive, dest: dest, overwrite: false } });
+    await refreshBoth();
+    const errs = (d && d.errors) || [];
+    if (errs.length) notice(errs.map(e => (e.path || '') + ' — ' + (e.error || e)).join('\n'), 'Extract failed');
+    status('Extracted: ' + ((d && d.extracted) || 0) + ' → ' + dest);
+  } catch (e) { status('Cannot extract: ' + e.message, true); }
+}
+async function archiveCreate() {
+  if (readOnlyMode()) { blockMutating(); return; }
+  const items = selPaths(activeSide);
+  if (!items.length) { status('Nothing selected', true); return; }
+  const name = cleanName($('#arcName').value) || 'archive.zip';
+  const dest = $('#arcDest').value.trim() || active().path;
+  try {
+    const d = await api('/api/archive/create', { method: 'POST',
+      body: { items: items, dest: dest, name: name, format: $('#arcFormat').value } });
+    await refreshBoth();
+    $('#arcPath').value = (d && d.path) || joinPath(dest, name);
+    status('Archive created: ' + baseName($('#arcPath').value));
+  } catch (e) { status('Cannot create archive: ' + e.message, true); }
+}
+
+/* --- свойства и хэши ---------------------------------------------------- */
+function openProps() {
+  const sel = selPaths(activeSide);
+  $('#propsPath').value = sel[0] || '';
+  $('#propsText').value = '';
+  openWin('winProps');
+}
+function propsOnePath() {
+  return $('#propsPath').value.trim() || selPaths(activeSide)[0] || active().path;
+}
+function propsFormat(d) {
+  return ['path', 'name', 'dir', 'size', 'mtime', 'ctime', 'mode', 'modeText', 'type',
+    'mime', 'hidden', 'links', 'target'].filter(k => d[k] !== undefined && d[k] !== null)
+    .map(k => k + ': ' + d[k]).join('\n');
+}
+async function propsGet() {
+  try {
+    const d = await api('/api/properties?path=' + encodeURIComponent(propsOnePath()));
+    $('#propsText').value = propsFormat(d || {});
+  } catch (e) { status('Cannot read properties: ' + e.message, true); }
+}
+async function propsHash(algo) {
+  try {
+    const d = await api('/api/hash?' + ['path=' + encodeURIComponent(propsOnePath()), 'algo=' + algo].join('&'));
+    $('#propsText').value = algo.toUpperCase() + ' (' + (d && d.path || '') + ')\n' +
+      (d && d.hash || '') + '\n' + fmtSize(d && d.size);
+  } catch (e) { status('Cannot compute hash: ' + e.message, true); }
+}
+async function propsCompare() {
+  const paths = selPaths(activeSide);
+  if (paths.length !== 2) { status('Select exactly 2 files to compare', true); return; }
+  try {
+    const ds = await Promise.all(['sha256', 'md5'].map(algo => Promise.all(paths.map(p =>
+      api('/api/hash?' + ['path=' + encodeURIComponent(p), 'algo=' + algo].join('&'))))));
+    const out = paths.map((p, i) => p + '\n  SHA-256: ' + (ds[0][i] && ds[0][i].hash) +
+      '\n  MD5:     ' + (ds[1][i] && ds[1][i].hash)).join('\n\n');
+    const equal = ds[0][0] && ds[1][0] && ds[0][1] && ds[1][1] &&
+      ds[0][0].hash === ds[0][1].hash && ds[1][0].hash === ds[1][1].hash;
+    $('#propsText').value = out + '\n\n' + (equal ? 'EQUAL — same content' : 'NOT EQUAL');
+  } catch (e) { status('Cannot compare: ' + e.message, true); }
+}
+
+/* --- корзина и история отмены ------------------------------------------ */
+const trashSel = new Set();
+let historyPick = null;
+function openTrash() { openWin('winTrash'); loadTrash(); loadHistory(); }
+async function loadTrash() {
+  const box = $('#trashList'); box.textContent = ''; trashSel.clear();
+  try {
+    const d = await api('/api/trash?limit=200');
+    (d && d.items || []).forEach(it => {
+      const r = document.createElement('div'); r.className = 'datarow four';
+      r.dataset.trashId = it.id; r.title = it.path || '';
+      const a = document.createElement('span'); a.textContent = it.name || baseName(it.path || '');
+      const b = document.createElement('span'); b.className = 'dim'; b.textContent = fmtSize(it.size);
+      const c = document.createElement('span'); c.className = 'dim'; c.textContent = it.path || '';
+      const e = document.createElement('span'); e.className = 'dim'; e.textContent = it.deletedAt ? fmtTs(it.deletedAt) : '';
+      r.appendChild(a); r.appendChild(b); r.appendChild(c); r.appendChild(e); box.appendChild(r);
+    });
+    if (!box.children.length) box.innerHTML = '<div class="datarow simple dim">Trash is empty</div>';
+  } catch (e) { box.innerHTML = '<div class="datarow simple dim">Cannot load: ' + e.message + '</div>'; }
+}
+async function loadHistory() {
+  const box = $('#historyList'); box.textContent = ''; historyPick = null;
+  try {
+    const d = await api('/api/undo/history');
+    const groups = [['undo', (d && d.items) || []], ['redo', (d && d.redo) || []]];
+    groups.forEach(g => g[1].forEach(it => {
+      const r = document.createElement('div'); r.className = 'datarow two';
+      r.dataset.histId = it.id; r.dataset.histKind = g[0];
+      const a = document.createElement('span'); a.textContent = (g[0] === 'redo' ? '↷ ' : '↶ ') + (it.label || '');
+      const b = document.createElement('span'); b.className = 'dim'; b.textContent = fmtTs(it.time);
+      r.appendChild(a); r.appendChild(b); box.appendChild(r);
+    }));
+    if (!box.children.length) box.innerHTML = '<div class="datarow simple dim">History is empty</div>';
+  } catch (e) { box.innerHTML = '<div class="datarow simple dim">Cannot load: ' + e.message + '</div>'; }
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('#trashList [data-trash-id]');
+  if (t) {
+    const id = t.dataset.trashId;
+    if (e.ctrlKey || e.metaKey) { trashSel.has(id) ? trashSel.delete(id) : trashSel.add(id); }
+    else { trashSel.clear(); trashSel.add(id); }
+    $$('#trashList [data-trash-id]').forEach(r => r.classList.toggle('sel', trashSel.has(r.dataset.trashId)));
+    return;
+  }
+  const h = e.target.closest('#historyList [data-hist-id]');
+  if (h) {
+    $$('#historyList [data-hist-id]').forEach(r => r.classList.remove('sel'));
+    h.classList.add('sel'); historyPick = h;
+  }
+});
+async function actRedo() {
+  if (readOnlyMode()) { blockMutating(); return; }
+  try {
+    const d = await api('/api/redo', { method: 'POST', body: {} });
+    await refreshBoth(); await loadHistory();
+    const errs = (d && d.errors) || [];
+    if (errs.length) notice(errs.map(e => (e.path || '') + ' — ' + e.error).join('\n'), 'Redo failed');
+    status('Redone: ' + ((d && d.label) || 'last action'));
+  } catch (e) { status('Cannot redo: ' + e.message, true); }
+}
+async function trashAction(kind) {
+  if (readOnlyMode()) { blockMutating(); return; }
+  const items = Array.from(trashSel);
+  if (!items.length) { status('Select items in trash', true); return; }
+  if (kind === 'purge') {
+    const ok = await confirmBox('Purge ' + items.length + ' item(s)? This cannot be undone.', 'Trash');
+    if (!ok) return;
+  }
+  try {
+    const d = await api('/api/trash/' + kind, { method: 'POST', body: { items: items } });
+    await refreshBoth(); await loadTrash(); await loadHistory();
+    const errs = (d && d.errors) || [];
+    if (errs.length) notice(errs.map(e => (e.path || '') + ' — ' + e.error).join('\n'), 'Trash failed');
+    status((kind === 'restore' ? 'Restored: ' : 'Purged: ') +
+      ((kind === 'restore' ? d && d.restored : d && d.purged) || items.length));
+  } catch (e) { status('Cannot ' + kind + ': ' + e.message, true); }
+}
+async function historyAction(kind) {
+  if (kind === 'redo') { await actRedo(); return; }
+  await actUndo(); await loadHistory();
+}
+
+/* --- журнал доступа ----------------------------------------------------- */
+function openAudit() { openWin('winAudit'); loadAudit(); }
+async function loadAudit() {
+  const box = $('#auditList'); box.textContent = '';
+  try {
+    const d = await api('/api/audit?limit=200');
+    (d && d.items || []).forEach(it => {
+      const r = document.createElement('div'); r.className = 'datarow four';
+      const a = document.createElement('span'); a.textContent = fmtTs(it.ts);
+      const b = document.createElement('span'); b.className = 'dim'; b.textContent = it.ip || '';
+      const c = document.createElement('span'); c.textContent = it.action + ' ' + (it.path || '');
+      const e = document.createElement('span'); e.className = 'dim'; e.textContent = it.status;
+      r.appendChild(a); r.appendChild(b); r.appendChild(c); r.appendChild(e); box.appendChild(r);
+    });
+    if (!box.children.length) box.innerHTML = '<div class="datarow simple dim">No records</div>';
+    $('#auditInfo').textContent = (d && d.items || []).length + ' record(s)';
+  } catch (e) { $('#auditInfo').textContent = 'Cannot load: ' + e.message; }
+}
+
+/* --- настройки (только UI, сервер не трогаем) --------------------------- */
+function updateModeBadge() {
+  const el = $('#fmMode');
+  if (!el) return;
+  const show = readOnlyMode();
+  el.hidden = !show;
+  el.textContent = readOnlyMode() ? (READ_ONLY ? 'read-only' : 'view only') : '';
+  el.title = ROLE === 'view' ? 'role: view' : 'role: admin';
+}
+function renderSettingsInfo() {
+  const el = $('#setServerInfo');
+  if (!el) return;
+  el.textContent = 'Server' + (SERVER_VERSION ? ' ' + SERVER_VERSION : '') +
+    (SESSION_TTL ? ' · session TTL ' + SESSION_TTL + ' s' : '') +
+    ' · read-only: ' + (READ_ONLY ? 'yes' : 'no') + ' · role: ' + ROLE;
+}
+function openSettings() {
+  $('#setFontSize').value = FM.listSize || 13;
+  $('#setConfirm').checked = FM.confirmDelete !== false;
+  $('#setHidden').checked = showHidden;
+  $('#setRemember').checked = C.rememberLayout !== false;
+  renderSettingsInfo();
+  openWin('winSettings');
+}
+function initSettings() {
+  $('#setFontSize').addEventListener('change', e => {
+    const v = Math.max(10, Math.min(24, parseInt(e.target.value, 10) || 13));
+    e.target.value = v; FM.listSize = v;
+    let st = $('#rowFontStyle');
+    if (!st) { st = document.createElement('style'); st.id = 'rowFontStyle'; document.head.appendChild(st); }
+    st.textContent = '.row{font-size:' + v + 'px}';
+    document.documentElement.style.setProperty('--row-size', v + 'px');
+  });
+  $('#setConfirm').addEventListener('change', e => { FM.confirmDelete = e.target.checked; });
+  $('#setHidden').addEventListener('change', e => {
+    showHidden = e.target.checked; store('hidden', showHidden ? '1' : '0'); updateMarks(); renderPanes();
+  });
+  $('#setRemember').addEventListener('change', e => { C.rememberLayout = e.target.checked; });
+  $('#searchGo').addEventListener('click', runSearch);
+  $('#searchQ').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
+  $('#batchRefresh').addEventListener('click', renderBatchPreview);
+  $('#batchApply').addEventListener('click', actBatchApply);
+  ['batchFind', 'batchReplace', 'batchPattern', 'batchStart'].forEach(id => {
+    $('#' + id).addEventListener('input', renderBatchPreview);
+  });
+  $('#arcBrowse').addEventListener('click', archiveBrowse);
+  $('#arcExtract').addEventListener('click', archiveExtract);
+  $('#arcCreate').addEventListener('click', archiveCreate);
+  $('#propsGet').addEventListener('click', propsGet);
+  $('#propsSha').addEventListener('click', () => propsHash('sha256'));
+  $('#propsMd5').addEventListener('click', () => propsHash('md5'));
+  $('#propsCompare').addEventListener('click', propsCompare);
+  $('#trashRefresh').addEventListener('click', () => { loadTrash(); loadHistory(); });
+  $('#trashRestore').addEventListener('click', () => trashAction('restore'));
+  $('#trashPurge').addEventListener('click', () => trashAction('purge'));
+  $('#histUndo').addEventListener('click', () => historyAction('undo'));
+  $('#histRedo').addEventListener('click', () => historyAction('redo'));
+  $('#auditRefresh').addEventListener('click', loadAudit);
+}
 
 /* --- контекстное меню --------------------------------------------------- */
 let ctxEl = null;
@@ -1045,10 +1836,18 @@ function showContextMenu(x, y) {
       '<button data-c="paste"><span>Paste</span><span class="sc">Ctrl+V</span></button>' +
       '<div class="sep"></div>' +
       '<button data-c="rename"><span>Rename…</span><span class="sc">F2</span></button>' +
+      '<button data-c="batch"><span>Batch rename…</span></button>' +
+      '<button data-c="touch"><span>Touch now</span></button>' +
+      '<button data-c="chmod"><span>Permissions…</span></button>' +
+      '<button data-c="copypath"><span>Copy full path</span></button>' +
+      '<button data-c="copyname"><span>Copy name</span></button>' +
+      '<button data-c="props"><span>Properties / hashes…</span></button>' +
+      '<button data-c="archive"><span>Archive…</span></button>' +
       '<button data-c="download"><span>Download</span></button>' +
       '<button data-c="pin"><span>Pin this folder</span></button>' +
       '<div class="sep"></div>' +
-      '<button data-c="delete"><span>Delete…</span><span class="sc">F8</span></button>';
+      '<button data-c="delete"><span>Delete…</span><span class="sc">F8</span></button>' +
+      '<button data-c="trashsel"><span>Move to trash…</span></button>';
     ctxEl.addEventListener('click', e => {
       const b = e.target.closest('button'); if (!b) return;
       hideCtx();
@@ -1056,7 +1855,7 @@ function showContextMenu(x, y) {
     });
   }
   ctxEl.style.left = Math.min(x, window.innerWidth - 210) + 'px';
-  ctxEl.style.top = Math.min(y, window.innerHeight - 260) + 'px';
+  ctxEl.style.top = Math.min(y, window.innerHeight - 380) + 'px';
   setTimeout(() => document.addEventListener('mousedown', hideCtxOnce), 0);
 }
 function hideCtxOnce(e) { if (ctxEl && !ctxEl.contains(e.target)) hideCtx(); }
@@ -1072,6 +1871,41 @@ function hideCtx() {
 const viewers = new Map();     // id окна -> состояние
 let viewerSeq = 0;
 const VIEW_EDIT_LIMIT = 2 * 1024 * 1024;
+
+// Бинарник отличаем по нулевым байтам и невалидной UTF-8 — расширение здесь
+// ничего не гарантирует: .jsonc и .conf точно так же текстовые, как .txt.
+// stream:true не ругается на оборванный многобайтовый символ на границе куска.
+function looksLikeText(buf, enc) {
+  const b = new Uint8Array(buf);
+  const n = Math.min(b.length, SNIFF_LIMIT);
+  for (let i = 0; i < n; i++) if (b[i] === 0) return false;
+  if (enc && enc !== 'utf-8') return true;   // win1251/latin1 не проверяем как UTF-8
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(b.subarray(0, n), { stream: true });
+    return true;
+  } catch (e) { return false; }
+}
+function decodeText(buf, truncated, enc) {
+  let txt = new TextDecoder(enc || 'utf-8').decode(buf);
+  if (truncated && /\uFFFD$/.test(txt)) txt = txt.slice(0, -1);  // оборванный символ
+  return txt;
+}
+async function fetchTextChunk(st) {
+  const url = apiUrl('/api/inline', { path: st.path });
+  const get = async range => {
+    const r = await fetch(url, range ? { headers: { Range: 'bytes=0-' + (range - 1) } } : {});
+    if (r.status === 416) return get(null);   // пустой файл: Range неприменим
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const buf = await r.arrayBuffer();
+    const cr = r.headers.get('Content-Range') || '';
+    const m = /\/(\d+)\s*$/.exec(cr);
+    return { buf: buf, total: m ? parseInt(m[1], 10) : buf.byteLength };
+  };
+  // грузим не больше лимита редактирования; настоящий размер берём из Content-Range
+  const part = await get(VIEW_EDIT_LIMIT);
+  part.truncated = part.total > part.buf.byteLength;
+  return part;
+}
 
 function vEl(st, role) { return st.el.querySelector('[data-vrole="' + role + '"]'); }
 function vEls(st, role) { return Array.from(st.el.querySelectorAll('[data-vrole="' + role + '"]')); }
@@ -1113,6 +1947,198 @@ function viewerMsg(text) {
   return m;
 }
 function lineCount(s) { return s ? s.split(/\r\n|\r|\n/).length : 0; }
+
+/* --- редактор: позиция, гуттер, подсветка, поиск, черновики ------------- */
+// Логическая позиция каретки: CRLF считается одним переводом строки,
+// табы — одним столбцом. lastIndexOf('\n', caret-1) работает и для CRLF.
+function updateViewerPos(st) {
+  if (!st || st.kind !== 'text') return;
+  const ta = vEl(st, 'text'); if (!ta) return;
+  const el = vEl(st, 'pos'); if (!el) return;
+  const caret = Math.max(0, Math.min(ta.selectionStart || 0, ta.value.length));
+  const value = ta.value;
+  const lastNl = value.lastIndexOf('\n', caret - 1);
+  const line = value.slice(0, caret).split(/\r\n|\r|\n/).length;
+  const col = caret - (lastNl + 1) + 1;
+  el.textContent = 'Ln ' + line + ', Col ' + col;
+}
+function rafViewerPos(st) {
+  // click/keyup/select приходят до того, как браузер обновит selectionStart
+  if (window.requestAnimationFrame) requestAnimationFrame(() => updateViewerPos(st));
+  else setTimeout(() => updateViewerPos(st), 0);
+}
+function scrollViewerCaret(st, pos) {
+  const ta = vEl(st, 'text'); if (!ta) return;
+  const line = ta.value.slice(0, pos).split('\n').length - 1;
+  const lh = parseFloat(getComputedStyle(ta).lineHeight) || 18;
+  ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 2);
+  const hl = vEl(st, 'hl'), g = vEl(st, 'gutter');
+  if (hl) { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; }
+  if (g) g.scrollTop = ta.scrollTop;
+  rafViewerPos(st);
+}
+function updateViewerGutter(st) {
+  if (!st || st.kind !== 'text') return;
+  const g = vEl(st, 'gutter'), ta = vEl(st, 'text');
+  if (!g || !ta) return;
+  const n = Math.max(1, lineCount(ta.value)), lines = [];
+  for (let i = 1; i <= n; i++) lines.push(i);
+  g.textContent = lines.join('\n');
+  g.scrollTop = ta.scrollTop;
+}
+const KW_GENERIC = ['if','else','for','while','do','switch','case','break','continue','return',
+  'function','class','def','import','from','as','export','const','let','var','new','try','catch',
+  'finally','throw','raise','this','self','true','false','null','None','True','False','and','or',
+  'not','in','is','lambda','yield','async','await','public','private','static','void','struct',
+  'interface','type','enum','package','SELECT','FROM','WHERE','INSERT','UPDATE','DELETE','CREATE'];
+const KW_EXT = {
+  py: ['elif','pass','with','global','nonlocal','del','assert','except','print'],
+  sh: ['then','fi','echo','local','source','exit'],
+  css: ['media','important','inherit'],
+  sql: ['JOIN','ON','GROUP','ORDER','BY','LIMIT','TABLE','DROP','ALTER','VALUES','SET']
+};
+function escapeHtmlLite(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+// Подсветка без библиотек: сначала экранируем HTML, потом помечаем токены.
+function highlightCode(text, ext) {
+  const src = escapeHtmlLite(text);
+  const keys = new Set(KW_GENERIC.concat(KW_EXT[ext] || []));
+  const re = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_$][\w$]*\b)/g;
+  let out = '', last = 0, m;
+  while ((m = re.exec(src))) {
+    out += src.slice(last, m.index);
+    const t = m[0];
+    let cls = '';
+    if (/^(\/\/|#|\/\*)/.test(t)) cls = 'tok-com';
+    else if (/^["'`]/.test(t)) cls = 'tok-str';
+    else if (/^\d/.test(t)) cls = 'tok-num';
+    else if (keys.has(t)) cls = 'tok-kw';
+    out += cls ? '<span class="' + cls + '">' + t + '</span>' : t;
+    last = m.index + t.length;
+  }
+  return out + src.slice(last);
+}
+function updateViewerHighlight(st) {
+  if (!st || st.kind !== 'text') return;
+  const hl = vEl(st, 'hl'), ta = vEl(st, 'text');
+  if (!hl || !ta) return;
+  hl.innerHTML = highlightCode(ta.value, extOf(st.path)) + (/\n$/.test(ta.value) ? '\n' : '');
+  hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft;
+}
+function scheduleHighlight(st) {
+  clearTimeout(st.hlT);
+  st.hlT = setTimeout(() => updateViewerHighlight(st), 80);
+}
+function draftKey(st) { return 'draft.' + st.path; }
+function clearDraft(st) {
+  if (!st || !st.path) return;
+  clearTimeout(st.draftT);
+  try { localStorage.removeItem(LS + draftKey(st)); } catch (e) {}
+}
+function saveDraft(st) {
+  if (!st || st.kind !== 'text') return;
+  const ta = vEl(st, 'text'); if (!ta) return;
+  if (ta.value === st.savedText) clearDraft(st);
+  else { try { localStorage.setItem(LS + draftKey(st), ta.value); } catch (e) {} }
+}
+function scheduleDraft(st) {
+  clearTimeout(st.draftT);
+  st.draftT = setTimeout(() => saveDraft(st), 400);
+}
+function viewerEolText(st, text) {
+  return st.eol === 'crlf' ? text.replace(/\r\n|\r|\n/g, '\r\n') : text.replace(/\r\n|\r/g, '\n');
+}
+function markViewerDirty(st) {
+  if (!st || st.kind !== 'text') return;
+  if (!st.dirty) { st.dirty = true; updateViewerUI(st); }
+  updateViewerPos(st); updateViewerGutter(st);
+  scheduleHighlight(st); scheduleDraft(st);
+}
+function openFindBar(st, replace) {
+  if (!st || st.kind !== 'text') return;
+  const bar = vEl(st, 'findbar'); if (!bar) return;
+  bar.hidden = false;
+  const target = replace ? vEl(st, 'replace') : vEl(st, 'find');
+  if (target) { target.focus(); target.select(); }
+  updateViewerPos(st);
+}
+function closeFindBar(st) {
+  const bar = vEl(st, 'findbar');
+  if (bar) bar.hidden = true;
+  const ta = vEl(st, 'text');
+  if (ta) { ta.focus(); rafViewerPos(st); }
+}
+function viewerFind(st, back) {
+  const ta = vEl(st, 'text'), inp = vEl(st, 'find');
+  if (!ta || !inp) return;
+  const q = inp.value;
+  if (!q) { status('Enter text to find', true); return; }
+  const from = back ? ta.selectionStart : ta.selectionEnd;
+  let pos = back ? ta.value.lastIndexOf(q, Math.max(0, from - q.length)) : ta.value.indexOf(q, from);
+  if (pos < 0) pos = back ? ta.value.lastIndexOf(q) : ta.value.indexOf(q);
+  if (pos < 0) { status('Not found: ' + q, true); return; }
+  ta.focus(); ta.setSelectionRange(pos, pos + q.length);
+  scrollViewerCaret(st, pos);
+}
+function viewerReplace(st) {
+  const ta = vEl(st, 'text'), inp = vEl(st, 'find'), rep = vEl(st, 'replace');
+  if (!ta || !inp || !rep) return;
+  const q = inp.value;
+  if (!q) { status('Enter text to find', true); return; }
+  const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+  if (sel !== q) { viewerFind(st, false); return; }
+  const pos = ta.selectionStart;
+  ta.value = ta.value.slice(0, pos) + rep.value + ta.value.slice(ta.selectionEnd);
+  ta.focus(); ta.setSelectionRange(pos + rep.value.length, pos + rep.value.length);
+  markViewerDirty(st); updateViewerGutter(st); scrollViewerCaret(st, pos);
+  viewerFind(st, false);
+}
+function viewerReplaceAll(st) {
+  const ta = vEl(st, 'text'), inp = vEl(st, 'find'), rep = vEl(st, 'replace');
+  if (!ta || !inp || !rep) return;
+  const q = inp.value;
+  if (!q) { status('Enter text to find', true); return; }
+  const count = ta.value.split(q).length - 1;
+  if (!count) { status('Nothing to replace', true); return; }
+  ta.value = ta.value.split(q).join(rep.value);
+  ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+  markViewerDirty(st); updateViewerGutter(st); scrollViewerCaret(st, ta.value.length);
+  status('Replaced: ' + count);
+}
+async function viewerGoto(st) {
+  const ta = vEl(st, 'text'); if (!ta) return;
+  const answer = await promptBox('Go to line:', '', 'Go to line');
+  if (answer === null) return;
+  const n = parseInt(answer, 10);
+  if (!isFinite(n) || n < 1) { status('Invalid line number', true); return; }
+  const lines = ta.value.split(/\r\n|\r|\n/);
+  const line = Math.min(n, lines.length);
+  let pos = 0;
+  for (let i = 0; i < line - 1; i++) pos += lines[i].length + 1;
+  ta.focus(); ta.setSelectionRange(pos, pos);
+  scrollViewerCaret(st, pos);
+}
+async function setViewerEncoding(st, enc) {
+  if (!st || st.kind !== 'text' || st.encoding === enc) return;
+  if (st.dirty) {
+    const ok = await confirmBox('Discard unsaved changes in ' + baseName(st.path) + '?', 'Viewer');
+    if (!ok) return;
+  }
+  st.dirty = false; clearDraft(st);
+  st.encoding = enc; updateViewerUI(st); renderViewer(st);
+}
+function setViewerEol(st, eol) {
+  if (!st || st.kind !== 'text' || st.eol === eol) return;
+  const ta = vEl(st, 'text');
+  if (ta) {
+    const old = viewerEolText(st, ta.value);
+    st.eol = eol;
+    ta.value = viewerEolText(st, old);
+    markViewerDirty(st); updateViewerGutter(st);
+  } else { st.eol = eol; }
+  updateViewerUI(st);
+}
 function fmtDuration(sec) {
   if (!isFinite(sec) || sec < 0) return '';
   const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
@@ -1122,7 +2148,8 @@ function fmtDuration(sec) {
 function registerViewer(el) {
   const st = {
     el: el, id: el.id, path: '', kind: '', canEdit: false,
-    editing: false, dirty: false, stopped: false, load: 0, wrap: true
+    editing: false, dirty: false, stopped: false, load: 0, wrap: true,
+    encoding: 'utf-8', eol: 'lf', savedText: '', draftAsked: false
   };
   viewers.set(el.id, st);
   return st;
@@ -1158,6 +2185,7 @@ async function viewFile(path) {
   const st = createViewer();
   st.path = path;
   st.wrap = true;
+  st.encoding = 'utf-8'; st.eol = 'lf'; st.savedText = ''; st.draftAsked = false;
   openWin(st.id);
   vEl(st, 'title').textContent = 'Viewer — ' + baseName(path);
   vEl(st, 'meta').textContent = path;
@@ -1169,21 +2197,40 @@ async function viewFile(path) {
 function setViewerKind(st, kind) {
   st.kind = kind;
   vEl(st, 'body').classList.remove('editmode');
-  // у видео/аудио нет текста и настроек — меню File/View только мешают
+  // File/View и панель правки нужны только текстовому редактору.
+  // GIF/картинки, видео, аудио и бинарные файлы — просто просмотр.
+  const text = kind === 'text';
   const bar = st.el.querySelector('.menubar');
-  if (bar) bar.hidden = (kind === 'video' || kind === 'audio');
+  const tools = st.el.querySelector('.vbar');
+  const find = vEl(st, 'findbar');
+  if (bar) bar.hidden = !text;
+  if (tools) tools.hidden = !text;
+  if (find) find.hidden = true;
   updateViewerUI(st);
 }
 function updateViewerUI(st) {
-  const can = st.kind === 'text' && st.canEdit;
+  const text = st.kind === 'text';
+  const can = text && st.canEdit;
   st.el.querySelectorAll('[data-vact="edit"]').forEach(b => { b.disabled = !can; });
   st.el.querySelectorAll('[data-vact="saveText"]').forEach(b => { b.disabled = !can || !st.dirty; });
+  st.el.querySelectorAll('[data-vact="open"],[data-vact="saveAs"]').forEach(b => { b.disabled = !text; });
+  st.el.querySelectorAll('[data-vact="find"],[data-vact="goto"],[data-vact="findNext"],[data-vact="replaceOne"],[data-vact="replaceAll"]')
+    .forEach(b => { b.disabled = !text; });
   vEls(st, 'editLabel').forEach(e => { e.textContent = st.editing ? 'Stop editing' : 'Edit'; });
   const d = vEl(st, 'dirty');
   if (d) d.textContent = st.dirty ? '● unsaved changes'
       : (st.kind === 'text' && !st.canEdit ? 'read-only' : '');
+  vEls(st, 'encMark').forEach(e => { e.textContent = (e.dataset.enc || 'utf-8') === st.encoding ? '✓' : ''; });
+  vEls(st, 'eolMark').forEach(e => { e.textContent = (e.dataset.eol || 'lf') === st.eol ? '✓' : ''; });
   const ta = vEl(st, 'text');
-  if (ta) ta.readOnly = !st.editing;
+  if (ta) {
+    ta.readOnly = !st.editing;
+    const hl = vEl(st, 'hl');
+    const ws = st.wrap ? 'pre-wrap' : 'pre';
+    ta.style.whiteSpace = ws;
+    if (hl) hl.style.whiteSpace = ws;
+  }
+  updateViewerPos(st);
 }
 function viewerError(st, text) {
   const body = vEl(st, 'body');
@@ -1191,6 +2238,7 @@ function viewerError(st, text) {
   body.classList.remove('editmode');
   body.appendChild(viewerMsg(text));
   st.canEdit = st.editing = st.dirty = false;
+  const pos = vEl(st, 'pos'); if (pos) pos.textContent = 'Ln 1, Col 1';
   setViewerKind(st, 'binary');
 }
 
@@ -1245,60 +2293,77 @@ function renderViewer(st) {
     body.appendChild(box);
     return;
   }
-  const isText = TEXT_EXT.indexOf(ext) >= 0 || ext === '';
-  if (!isText) {
-    viewerError(st, 'Binary file — use Download (Alt+D) or open it over FTP.');
-    return;
-  }
-
+  // Любой не-медиа файл пробуем открыть как текст. Расширение — лишь
+  // подсказка: .jsonc, .json5, .env, .properties, конфиги без расширения
+  // и прочие текстовые файлы определяются по содержимому, а не по списку.
   setViewerKind(st, 'text');
   st.canEdit = st.editing = st.dirty = false;
   updateViewerUI(st);
   body.appendChild(viewerMsg('Loading…'));
-  fetch(apiUrl('/api/inline', { path: st.path }))
-    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
-    .then(buf => {
-      if (my !== st.load) return;
-      body.textContent = '';
-      if (buf.byteLength > VIEW_EDIT_LIMIT) {
-        const txt = new TextDecoder('utf-8').decode(buf.slice(0, VIEW_EDIT_LIMIT)) + '\n… (truncated)';
-        const pre = document.createElement('pre');
-        pre.textContent = txt;
-        pre.style.whiteSpace = st.wrap ? 'pre-wrap' : 'pre';
-        body.appendChild(pre);
-        st.canEdit = st.editing = st.dirty = false;
-        vEl(st, 'size').textContent = 'too large to edit · ' + fmtSize(buf.byteLength);
-        updateViewerUI(st);
-        return;
+  fetchTextChunk(st).then(async part => {
+    if (my !== st.load) return;
+    body.textContent = '';
+    if (!looksLikeText(part.buf, st.encoding)) {
+      viewerError(st, 'Binary file — use Download (Alt+D) or open it over FTP.');
+      return;
+    }
+    const serverText = decodeText(part.buf, part.truncated, st.encoding);
+    let txt = serverText, restored = false;
+    // черновик из localStorage: предлагаем восстановить, если он отличается
+    const draft = read(draftKey(st), null);
+    if (draft !== null && draft !== serverText && !st.draftAsked) {
+      st.draftAsked = true;
+      if (await confirmBox('Restore unsaved draft of ' + baseName(st.path) + '?', 'Draft')) {
+        txt = draft; restored = true;
       }
-      let txt;
-      try { txt = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
-      catch (e) {
-        viewerError(st, 'Not UTF-8 text — download it to open in another editor.');
-        return;
-      }
-      st.canEdit = true; st.editing = false; st.dirty = false;
+    }
+    if (my !== st.load) return;
+    if (part.truncated) {
+      const pre = document.createElement('pre');
+      pre.textContent = txt + '\n… (truncated)';
+      pre.style.whiteSpace = st.wrap ? 'pre-wrap' : 'pre';
+      body.appendChild(pre);
+      st.canEdit = st.editing = st.dirty = false;
+      vEl(st, 'size').textContent = 'too large to edit · ' + fmtSize(part.total);
+    } else {
+      st.canEdit = true; st.editing = false; st.dirty = restored; st.savedText = serverText;
+      const stack = document.createElement('div'); stack.className = 'vedit-stack';
+      const gutter = document.createElement('div'); gutter.className = 'vedit-gutter';
+      gutter.dataset.vrole = 'gutter'; gutter.setAttribute('aria-hidden', 'true');
+      const area = document.createElement('div'); area.className = 'vedit-area';
+      const hl = document.createElement('pre'); hl.className = 'vedit-hl';
+      hl.dataset.vrole = 'hl'; hl.setAttribute('aria-hidden', 'true');
       const ta = document.createElement('textarea');
       ta.dataset.vrole = 'text'; ta.className = 'vedit ro'; ta.spellcheck = false;
       ta.wrap = st.wrap ? 'soft' : 'off';
       ta.value = txt; ta.readOnly = true;
-      ta.addEventListener('input', () => {
-        if (!st.dirty) { st.dirty = true; updateViewerUI(st); }
+      ta.addEventListener('input', () => markViewerDirty(st));
+      ['keyup', 'click', 'select', 'focus'].forEach(ev =>
+        ta.addEventListener(ev, () => rafViewerPos(st)));
+      ta.addEventListener('scroll', () => {
+        if (hl) { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; }
+        gutter.scrollTop = ta.scrollTop;
+        rafViewerPos(st);
       });
       ta.addEventListener('keydown', e => {
-        if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
-          e.preventDefault(); saveViewerText(st);
-        }
+        const c = e.ctrlKey || e.metaKey, k = (e.key || '').toLowerCase();
+        if (c && k === 's') { e.preventDefault(); saveViewerText(st); }
+        else if (c && k === 'f' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); openFindBar(st, false); }
+        else if (c && k === 'h') { e.preventDefault(); e.stopPropagation(); openFindBar(st, true); }
+        else if (c && k === 'g') { e.preventDefault(); e.stopPropagation(); viewerGoto(st); }
       });
-      body.appendChild(ta);
+      area.appendChild(hl); area.appendChild(ta);
+      stack.appendChild(gutter); stack.appendChild(area);
+      body.appendChild(stack);
       body.classList.add('editmode');
-      vEl(st, 'size').textContent = lineCount(txt) + ' lines · ' + fmtSize(buf.byteLength);
-      updateViewerUI(st);
-    })
-    .catch(e => {
-      if (my !== st.load) return;
-      viewerError(st, 'Cannot open: ' + st.path + ' — ' + e.message);
-    });
+      vEl(st, 'size').textContent = lineCount(txt) + ' lines · ' + fmtSize(part.total);
+    }
+    updateViewerUI(st);
+    updateViewerGutter(st); updateViewerHighlight(st); updateViewerPos(st);
+  }).catch(e => {
+    if (my !== st.load) return;
+    viewerError(st, 'Cannot open: ' + st.path + ' — ' + e.message);
+  });
 }
 
 function toggleViewerEdit(st) {
@@ -1307,25 +2372,74 @@ function toggleViewerEdit(st) {
   updateViewerUI(st);
   if (st.editing) {
     const ta = vEl(st, 'text');
-    if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); rafViewerPos(st); }
   }
 }
 async function saveViewerText(st) {
   const ta = vEl(st, 'text');
   if (!ta || !st.canEdit) return;
+  if (readOnlyMode()) { blockMutating(); return; }
+  const text = viewerEolText(st, ta.value);
   try {
     const d = await api('/api/write', {
-      method: 'POST', body: { path: st.path, text: ta.value }
+      method: 'POST', body: { path: st.path, text: text }
     });
-    st.dirty = false;
-    updateViewerUI(st);
-    vEl(st, 'size').textContent = lineCount(ta.value) + ' lines · ' +
-      fmtSize((d && d.size) !== undefined ? d.size : new Blob([ta.value]).size);
+    st.dirty = false; st.savedText = ta.value;
+    clearDraft(st);
+    clearTimeout(st.hlT);
+    updateViewerUI(st); updateViewerPos(st);
+    vEl(st, 'size').textContent = lineCount(text) + ' lines · ' +
+      fmtSize((d && d.size) !== undefined ? d.size : new Blob([text]).size);
     status('Saved: ' + baseName(st.path));
     refreshBoth();
   } catch (e) {
     status('Cannot save: ' + e.message, true);
     notice('Cannot save ' + st.path + '\n' + e.message, 'Save');
+  }
+}
+function reloadViewer(st) {
+  if (st.dirty) {
+    confirmBox('Discard unsaved changes in ' + baseName(st.path) + '?', 'Viewer').then(ok => {
+      if (ok) { st.dirty = false; clearDraft(st); renderViewer(st); }
+    });
+  } else renderViewer(st);
+}
+function openViewerText(st) {
+  if (st.kind !== 'text') return;
+  // Открываем именно то, что видно в редакторе (включая несохранённые правки),
+  // обычным text/plain — иначе .md/.log/.json могли бы скачаться как binary.
+  const ta = vEl(st, 'text');
+  const value = ta ? ta.value : (vEl(st, 'body').textContent || '');
+  const url = URL.createObjectURL(new Blob([value], { type: 'text/plain;charset=utf-8' }));
+  window.open(url, '_blank', 'noopener');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+async function saveViewerAs(st) {
+  if (st.kind !== 'text') return;
+  if (readOnlyMode()) { blockMutating(); return; }
+  const ta = vEl(st, 'text');
+  const text = viewerEolText(st, ta ? ta.value : (vEl(st, 'body').textContent || ''));
+  const name = await promptBox('Save a copy as…', baseName(st.path), 'Save as');
+  if (!name) return;
+  const clean = cleanName(name);
+  if (!clean) { status('Invalid file name', true); return; }
+  const dest = joinPath(parentOf(st.path) || '/', clean);
+  if (dest === st.path) { status('Choose another name', true); return; }
+  try {
+    try {
+      await api('/api/newfile', { method: 'POST', body: { path: dest } });
+    } catch (e) {
+      if (e.message !== 'already exists') throw e;
+      const ok = await confirmBox('Overwrite ' + clean + '?', 'Save as');
+      if (!ok) return;
+    }
+    await api('/api/write', { method: 'POST', body: { path: dest, text: text } });
+    status('Saved copy: ' + dest);
+    refreshBoth();
+    viewFile(dest);
+  } catch (e) {
+    status('Cannot save as: ' + e.message, true);
+    notice('Cannot save as ' + dest + '\n' + e.message, 'Save as');
   }
 }
 
@@ -1345,23 +2459,31 @@ document.addEventListener('click', e => {
   closeMenus();
   const a = b.dataset.vact;
   if (a === 'close') closeWin(st.id);
-  else if (a === 'reload') {
-    if (st.dirty) {
-      confirmBox('Discard unsaved changes in ' + baseName(st.path) + '?', 'Viewer').then(ok => {
-        if (ok) { st.dirty = false; renderViewer(st); }
-      });
-    } else renderViewer(st);
-  }
-  else if (a === 'save') triggerDownload(st.path);
-  else if (a === 'open') window.open(apiUrl('/api/inline', { path: st.path }), '_blank');
+  else if (a === 'reload') reloadViewer(st);
+  else if (a === 'saveAs') saveViewerAs(st);
+  else if (a === 'open') openViewerText(st);
   else if (a === 'edit') toggleViewerEdit(st);
   else if (a === 'saveText') saveViewerText(st);
+  else if (a === 'find') openFindBar(st, false);
+  else if (a === 'goto') viewerGoto(st);
+  else if (a === 'findNext') viewerFind(st, b.dataset.back === '1');
+  else if (a === 'replaceOne') viewerReplace(st);
+  else if (a === 'replaceAll') viewerReplaceAll(st);
+  else if (a === 'closeFind') closeFindBar(st);
+  else if (a.indexOf('enc-') === 0) setViewerEncoding(st, a.slice(4) === 'utf8' ? 'utf-8' :
+    (a === 'enc-win1251' ? 'windows-1251' : 'iso-8859-1'));
+  else if (a.indexOf('eol-') === 0) setViewerEol(st, a.slice(4));
   else if (a === 'wrap') {
     st.wrap = !st.wrap;
     vEl(st, 'wrapMark').textContent = st.wrap ? '✓' : '';
     const ta = vEl(st, 'text');
-    if (ta) { ta.wrap = st.wrap ? 'soft' : 'off'; ta.style.whiteSpace = st.wrap ? 'pre-wrap' : 'pre'; }
-    else Array.from(vEl(st, 'body').querySelectorAll('pre')).forEach(p => {
+    if (ta) {
+      ta.wrap = st.wrap ? 'soft' : 'off';
+      ta.style.whiteSpace = st.wrap ? 'pre-wrap' : 'pre';
+      const hl = vEl(st, 'hl');
+      if (hl) hl.style.whiteSpace = st.wrap ? 'pre-wrap' : 'pre';
+      rafViewerPos(st);
+    } else Array.from(vEl(st, 'body').querySelectorAll('pre')).forEach(p => {
       p.style.whiteSpace = st.wrap ? 'pre-wrap' : 'pre';
     });
   }
@@ -1385,10 +2507,12 @@ function updateStatus() {
   $$('[data-act="download"]').forEach(b => { b.disabled = !downloadableSelection().files.length; });
   const f = (C.ftp || {});
   const host = f.host || location.hostname;
-  $('#fmFtp').textContent = 'FTP ' + FTP_USER + '@' + host + ':' + FTP_PORT;
+  $('#fmFtp').textContent = 'FTP ' + FTP_USER + '@' + host + ':' + FTP_PORT +
+    (FTP_PASSIVE ? ' · passive ' + FTP_PASSIVE : '');
 }
 
 function doAction(a) {
+  if (MUTATING.has(a) && readOnlyMode()) { blockMutating(); return; }
   switch (a) {
     case 'up': go(activeSide, parentOf(active().path) || '/'); break;
     case 'refresh': refresh(activeSide); break;
@@ -1400,9 +2524,22 @@ function doAction(a) {
     case 'copy': actCopy(); break;
     case 'paste': actPaste(); break;
     case 'undo': actUndo(); break;
+    case 'redo': actRedo(); break;
     case 'upload': $('#fileInput').click(); break;
     case 'download': actDownload(); break;
     case 'view': { const paths = selPaths(activeSide); if (paths.length) paths.forEach(viewFile); else status('Nothing selected', true); break; }
+    case 'search': openSearch(); break;
+    case 'batch': openBatch(); break;
+    case 'archive': openArchive(); break;
+    case 'props': openProps(); break;
+    case 'copypath': actCopyPath(); break;
+    case 'copyname': actCopyName(); break;
+    case 'touch': actTouch(); break;
+    case 'chmod': actChmod(); break;
+    case 'trashsel': actTrashSelection(); break;
+    case 'trash': openTrash(); break;
+    case 'audit': openAudit(); break;
+    case 'settings': openSettings(); break;
     case 'pin': pinCurrent(); break;
     case 'invert': invertSel(activeSide); break;
     case 'toother': transfer(selPaths(activeSide), other().path, 'copy'); break;
@@ -1441,18 +2578,31 @@ function buildHelp() {
     'назад, вперёд и вверх; закреплённые места — кнопками над списком. Клик по имени выделяет, ' +
     '<kbd>Ctrl</kbd>+клик добавляет к выделению, <kbd>Shift</kbd>+клик выделяет диапазон. ' +
     'Перетаскивание строки в другую панель переносит файл, с <kbd>Ctrl</kbd> — копирует; ' +
-    'файлы с диска можно просто бросить на панель — начнётся загрузка.</p>' +
+    'файлы с диска можно просто бросить на панель — начнётся загрузка. Во время передачи в правом нижнем углу появляется индикатор ' +
+     'с процентами и объёмом: видно, насколько файл уже загружен или скачан.</p>' +
     '<h3>Просмотр и правка</h3>' +
     '<p><kbd>F3</kbd> или кнопка <b>View</b> открывает каждый выделенный файл в отдельном окне ' +
     'Viewer — можно держать несколько окон одновременно и перетаскивать их мышью. ' +
     'Картинки, видео и аудио проигрываются прямо в окне (видео поддерживает перемотку), ' +
-    'текстовые файлы открываются в поле просмотра. Повторный вызов уже открытого файла ' +
-    'просто поднимает его окно; закрытие или сворачивание останавливает воспроизведение. ' +
-    'У видео и аудио меню <b>File/View</b> скрыты — только кнопки проигрывателя. ' +
-    'Кнопка <b>Edit</b> или <b>File → Edit text</b> разрешает ' +
-    'правку, <b>Save</b> или <kbd>Ctrl+S</kbd> сохраняет файл на сервере. Несохранённые ' +
-    'изменения защищены подтверждением при закрытии окна. Файлы больше 2 МБ и не-UTF-8 ' +
-    'текст открываются только для чтения — скачай их для правки.</p>' +
+    'а текстовые файлы открываются в поле просмотра. Тип определяется по содержимому, ' +
+    'поэтому подходит любой текст: <code>.txt</code>, <code>.jsonc</code>, <code>.json5</code>, ' +
+    '<code>.toml</code>, <code>.env</code>, <code>.properties</code>, конфиги и скрипты ' +
+    'с любым расширением. Повторный вызов уже открытого файла просто поднимает его окно; ' +
+    'закрытие или сворачивание останавливает воспроизведение. ' +
+    'Меню <b>File/View</b> и панель кнопок есть только в текстовом редакторе: ' +
+    'картинки (включая GIF), видео, аудио и бинарные файлы открываются без них. ' +
+    'В тексте <b>File → Edit text</b> (или <b>Edit</b>) разрешает правку, ' +
+    '<b>File → Save file</b> / <kbd>Ctrl+S</kbd> сохраняет файл, ' +
+    '<b>File → Save as…</b> пишет копию под другим именем, ' +
+    '<b>File → Open with browser…</b> открывает текст в новой вкладке, ' +
+    '<b>View → Reload</b> / <kbd>Ctrl+R</kbd> перечитывает файл, ' +
+    '<b>View → Word wrap</b> переключает перенос строк. Несохранённые ' +
+    'изменения защищены подтверждением при закрытии окна. Внизу редактора показывается ' +
+    'позиция каретки <b>Ln x, Col y</b>, слева — нумерация строк; <b>View → Find / replace</b> ' +
+    '(<kbd>Ctrl+F</kbd>, <kbd>Ctrl+H</kbd>) ищет и заменяет, <kbd>Ctrl+G</kbd> ведёт на строку. ' +
+    'Кодировка (UTF-8 / Windows-1251 / Latin-1) и EOL (LF/CRLF) выбираются в меню View. ' +
+    'Черновики правок сохраняются в браузере и предлагаются при повторном открытии. ' +
+    'Файлы больше 2 МБ открываются только для чтения — скачай их для правки.</p>' +
     '<h3>Отмена</h3>' +
     '<p><kbd>Ctrl+Z</kbd> или кнопка <b>Undo</b> отменяет последнюю файловую ' +
     'операцию: создание, удаление, переименование, перенос, копирование, ' +
@@ -1466,13 +2616,17 @@ function buildHelp() {
     '<tr><td>Ctrl+A / Ins</td><td>выделить всё / инвертировать выделение</td></tr>' +
     '<tr><td>Ctrl+H</td><td>показать/скрыть файлы и папки с точкой</td></tr>' +
     '<tr><td>Ctrl+X, Ctrl+C, Ctrl+V</td><td>вырезать, копировать, вставить</td></tr>' +
-    '<tr><td>Ctrl+Z</td><td>отменить последнее действие с файлами</td></tr>' +
+    '<tr><td>Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y</td><td>отменить / повторить действие с файлами</td></tr>' +
+    '<tr><td>Ctrl+F</td><td>фильтр в панели; в текстовом Viewer — найти</td></tr>' +
+    '<tr><td>Ctrl+Shift+F</td><td>поиск по файлам</td></tr>' +
     '<tr><td>F5 / F6</td><td>копировать / перенести в другую панель</td></tr>' +
     '<tr><td>F7</td><td>новая папка</td></tr>' +
     '<tr><td>F8 / Del</td><td>удалить</td></tr>' +
     '<tr><td>F2</td><td>переименовать</td></tr>' +
     '<tr><td>F3</td><td>открыть выделенные файлы, каждый в своём окне</td></tr>' +
-    '<tr><td>Ctrl+S (в Viewer)</td><td>сохранить отредактированный текст</td></tr>' +
+    '<tr><td>Ctrl+S (в текстовом Viewer)</td><td>сохранить отредактированный текст</td></tr>' +
+    '<tr><td>Ctrl+R (в текстовом Viewer)</td><td>перечитать файл, отказавшись от правок</td></tr>' +
+    '<tr><td>Ctrl+H / Ctrl+G (в текстовом Viewer)</td><td>заменить / перейти на строку</td></tr>' +
     '<tr><td>Ctrl+U</td><td>загрузить файлы с диска</td></tr>' +
     '<tr><td>Ctrl+D / Alt+D</td><td>скачать выделенные файлы (папки не скачиваются)</td></tr>' +
     '<tr><td>F5 (вне списка) / Ctrl+R</td><td>обновить обе панели</td></tr>' +
@@ -1484,6 +2638,7 @@ function buildHelp() {
     '<table>' +
     '<tr><td>Адрес</td><td><code>' + host + '</code></td></tr>' +
     '<tr><td>Порт</td><td><code>' + FTP_PORT + '</code></td></tr>' +
+    (FTP_PASSIVE ? '<tr><td>Passive ports</td><td><code>' + FTP_PASSIVE + '</code></td></tr>' : '') +
     '<tr><td>Пользователь</td><td><code>' + FTP_USER + '</code></td></tr>' +
     '<tr><td>Пароль</td><td>тот же, что от панели</td></tr>' +
     '<tr><td>Пример</td><td><code>ftp://' + FTP_USER + '@' + host + ':' + FTP_PORT + '/</code></td></tr>' +
@@ -1515,7 +2670,26 @@ document.addEventListener('keydown', e => {
     else if (e.key === 'Enter' && $('#dlgField').hidden) { e.preventDefault(); dlgClose(true); }
     return;
   }
-  if (typing && !inPath) return;   // в редакторском поле работают только его клавиши
+  const ctrlEarly = e.ctrlKey || e.metaKey;
+  const ek = (e.key || '').toLowerCase();
+  const vw = e.target.closest && e.target.closest('.viewer-win');
+  const inViewerText = !!(vw && viewers.has(vw.id) && viewers.get(vw.id).kind === 'text');
+  // эти сочетания работают и в полях ввода: Ctrl+F в текстовом Viewer
+  // оставляем самому редактору (он открывает свою строку поиска)
+  if ($('#winLogin').hidden && ctrlEarly) {
+    if (e.shiftKey && ek === 'f') { e.preventDefault(); doAction('search'); return; }
+    if (e.shiftKey && ek === 'z') { e.preventDefault(); actRedo(); return; }
+    if (!e.shiftKey && ek === 'y') { e.preventDefault(); actRedo(); return; }
+    if (!e.shiftKey && ek === 'f' && !inViewerText) {
+      e.preventDefault();
+      const fi = $('[data-filter]', paneEl(activeSide));
+      if (fi) { fi.focus(); fi.select(); }
+      return;
+    }
+  }
+  // в редакторском поле работают только его клавиши, но Ctrl+R из текстового
+  // Viewer должен перечитывать файл, а не обновлять обе панели
+  if (typing && !inPath && !(ctrlEarly && ek === 'r')) return;
   if (e.target.id === 'loginPass') return;
   if (dlgResolve) return;
 
@@ -1556,7 +2730,15 @@ document.addEventListener('keydown', e => {
   if ((ctrl && (k === 'd' || k === 'D')) || (e.altKey && (k === 'd' || k === 'D'))) {
     e.preventDefault(); actDownload(); return;
   }
-  if (ctrl && (k === 'r' || k === 'R')) { e.preventDefault(); refreshBoth(); return; }
+  if (ctrl && (k === 's' || k === 'S') && !e.defaultPrevented) {
+    const vw = e.target.closest && e.target.closest('.viewer-win');
+    if (vw && viewers.has(vw.id)) { e.preventDefault(); saveViewerText(viewers.get(vw.id)); return; }
+  }
+  if (ctrl && (k === 'r' || k === 'R')) {
+    const vw = e.target.closest && e.target.closest('.viewer-win');
+    if (vw && viewers.has(vw.id)) { e.preventDefault(); reloadViewer(viewers.get(vw.id)); return; }
+    e.preventDefault(); refreshBoth(); return;
+  }
   if (ctrl && (k === 'h' || k === 'H')) { e.preventDefault(); doAction('hidden'); return; }
 });
 
@@ -1577,6 +2759,7 @@ function applyConfig() {
   $$('[data-cfg="serverIcon"]').forEach(e => e.textContent = C.serverIcon || 'F');
   $$('[data-cfg="fmTitle"]').forEach(e => e.textContent = (FM.windowTitle || 'File Manager'));
   if (FM.listSize) document.documentElement.style.setProperty('--row-size', FM.listSize + 'px');
+  else document.documentElement.style.setProperty('--row-size', '13px');
   // стартовые размеры вспомогательных окон (потом запоминаются в браузере)
   const V = C.viewer || {}, A = C.about || {};
   const sizeOf = (id, w, h) => {
@@ -1588,6 +2771,7 @@ function applyConfig() {
   sizeOf('winView', V.width, V.height);
   sizeOf('winHelp', A.width, A.height);
   const st = document.createElement('style');
+  st.id = 'rowFontStyle';
   st.textContent = '.row{font-size:' + (FM.listSize || 13) + 'px}';
   document.head.appendChild(st);
 }
@@ -1609,8 +2793,10 @@ function boot() {
   initMenus();
   initActions();
   initPanes();
+  initSettings();
   buildHelp();
   updateMarks();
+  updateModeBadge();
   tick(); setInterval(tick, 15000);
 
   // развёрнутая «оболочка» всегда занимает весь экран при изменении окна
@@ -1635,7 +2821,8 @@ function boot() {
 
   // восстановление раскладки вспомогательных окон (оболочка не сохраняется)
   const L = loadLayout();
-  ['winHelp', 'winPlaces'].forEach(id => {
+  ['winHelp', 'winPlaces', 'winSearch', 'winBatch', 'winArchive', 'winProps',
+    'winTrash', 'winAudit', 'winSettings'].forEach(id => {
     if (L[id] && L[id].open) openWin(id);
   });
 

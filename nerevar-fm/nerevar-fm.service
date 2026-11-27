@@ -36,6 +36,12 @@
 #         Group=files
 #         ExecStart=/usr/bin/python3 /opt/nerevar-fm/server.py --port 8090 --root /mnt/data
 #
+#  ДОПОЛНИТЕЛЬНЫЕ ФЛАГИ (если нужны):
+#         --read-only                       только просмотр и скачивание
+#         --session-ttl 3600                неактивность 1 час
+#         --ftp-pasv-min 50000 --ftp-pasv-max 50100
+#         --ftp-max-clients 5               лимит FTP-подключений
+#
 # =============================================================================
 
 [Unit]

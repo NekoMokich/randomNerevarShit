@@ -374,6 +374,23 @@ input:focus{outline:1px dotted var(--panel-fg);outline-offset:-3px}
 .prog.on{display:block}
 .prog i{display:block;height:100%;width:0;background:var(--sel-bg)}
 
+/* ===== ИНДИКАТОР ПЕРЕДАЧИ (загрузка/скачивание) ========================= */
+.xfer{position:absolute;right:9px;bottom:26px;width:272px;z-index:70;
+  padding:6px 7px 5px;background:var(--face);color:var(--txt);
+  border-width:var(--bw);border-style:var(--raised);
+  border-color:var(--hl) var(--sh) var(--sh) var(--hl);
+  font:11px var(--ui-font);box-shadow:1px 1px 0 rgba(0,0,0,.22)}
+.xfer-title{font-weight:bold;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  margin-bottom:4px}
+.xfer-track{height:15px;padding:1px;background:var(--face-2);overflow:hidden;
+  border-width:var(--bw);border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh)}
+.xfer-track i{display:block;height:100%;width:0;background:var(--sel-bg);
+  transition:width .12s linear}
+.xfer-info{display:flex;justify-content:space-between;gap:6px;margin-top:4px;
+  color:var(--txt-dim);white-space:nowrap}
+.xfer-pct{font-weight:bold;color:var(--txt)}
+
 /* ===== ПРОКРУТКА (как в NeXT/WM) ======================================= */
 ::-webkit-scrollbar{width:15px;height:15px}
 ::-webkit-scrollbar-track{background:var(--face-2);border-left:1px solid var(--sh)}
@@ -408,6 +425,88 @@ html[data-skin=wm][data-wmtheme=dark] ::-webkit-scrollbar-thumb{background:#5a5a
 html[data-skin=wm][data-wmtheme=dark] ::-webkit-scrollbar-thumb:hover{background:#6a6a6a}
 html[data-skin=wm][data-wmtheme=dark] ::-webkit-scrollbar-button{background-color:#555555;border:1px outset #7a7a7a}
 html[data-skin=wm][data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
+
+/* ===== ФИЛЬТР, НОВЫЕ ОКНА, РЕДАКТОР =================================== */
+.pathrow .filter{flex:0 0 118px;width:118px}
+.pathrow .fclear{width:22px;font:bold 12px/1 var(--ui-font);justify-content:center;padding:4px 0}
+.badge{padding:1px 6px;background:var(--face-2);color:var(--txt-dim);
+  border:1px solid var(--sh);font-weight:bold;font-size:10px;white-space:nowrap}
+.winbody{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:6px;padding:2px}
+.formrow{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.formrow label{font-size:11px;font-weight:bold;white-space:nowrap}
+.formrow .txt{flex:1 1 120px;min-width:60px;width:auto}
+.formrow select,.formrow input[type=number]{padding:4px 5px;background:var(--panel);
+  color:var(--panel-fg);font:12px var(--ui-font);
+  border-width:var(--bw);border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh)}
+.formrow .btn{white-space:nowrap}
+.winbody .hint{font-size:11px;color:var(--txt-dim);min-height:14px}
+.datalist{flex:1 1 auto;min-height:80px;overflow:auto;background:var(--panel);
+  color:var(--panel-fg);border-width:var(--bw);border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh)}
+.datarow{display:grid;grid-template-columns:1fr 92px 118px;gap:0;
+  padding:2px 6px;font-size:12px;cursor:default;white-space:nowrap;overflow:hidden}
+.datarow>span{overflow:hidden;text-overflow:ellipsis}
+.datarow:hover{background:var(--face-2);color:var(--txt)}
+.datarow.sel{background:var(--sel-bg);color:var(--sel-fg)}
+.datarow.sel .dim{color:var(--sel-fg);opacity:.85}
+.datarow.simple{grid-template-columns:1fr}
+.datarow.two{grid-template-columns:1fr 1fr}
+.datarow.four{grid-template-columns:140px 78px 1fr 60px}
+.dim{color:var(--txt-dim)}
+.outtext{flex:1 1 auto;min-height:80px;width:100%;resize:none;
+  font:12px/1.45 "DejaVu Sans Mono","Lucida Console",monospace;
+  background:var(--panel);color:var(--panel-fg);padding:6px;
+  border-width:var(--bw);border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh)}
+.split{display:flex;gap:8px;flex:1 1 auto;min-height:0}
+.split>div{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:4px}
+.split .cap{font-size:11px;font-weight:bold;background:var(--face-2);padding:2px 5px}
+
+/* редактор: строка поиска, гуттер и слой подсветки */
+.findbar{flex:0 0 auto;display:flex;align-items:center;gap:4px;padding:2px 3px 4px}
+.findbar .txt{max-width:220px;width:auto;font-size:12px;padding:3px 5px}
+.findbar label{font-size:11px;font-weight:bold}
+.findbar .btn{padding:3px 6px;font-size:11px}
+.vedit-stack{flex:1 1 auto;min-height:0;display:flex;align-items:stretch;
+  background:var(--panel);border-width:var(--bw);border-style:var(--sunken);
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh);padding:4px}
+.vedit-gutter{flex:0 0 auto;width:44px;overflow:hidden;padding:6px 4px 6px 0;
+  text-align:right;color:var(--txt-dim-2);background:var(--face-2);
+  border-right:1px solid var(--sh);font:12px/1.45 "DejaVu Sans Mono","Lucida Console",monospace;
+  user-select:none;white-space:pre}
+.vedit-area{position:relative;flex:1 1 auto;min-width:0;min-height:0;display:flex;overflow:hidden}
+.vedit-area .vedit{border:0;padding:6px;background:transparent;color:transparent;
+  caret-color:var(--panel-fg);z-index:2}
+.vedit-area .vedit::selection{background:var(--sel-bg);color:transparent}
+/* Слой подсветки должен занимать ровно видимую область textarea и быть
+   прокручиваемым: иначе текст (он рисуется здесь) стоит на месте, пока
+   гуттер и каретка едут вниз. Высота задаётся явно — inset:0 у <pre>
+   внутри flex-контейнера рассчитывается по содержимому, а не по Area. */
+.vbody .vedit-hl{position:absolute;top:0;left:0;width:100%;height:100%;
+  margin:0;align-self:stretch;box-sizing:border-box;padding:6px;pointer-events:none;
+  overflow:hidden;white-space:pre-wrap;word-break:normal;
+  font:12px/1.45 "DejaVu Sans Mono","Lucida Console",monospace;
+  color:var(--panel-fg);tab-size:4;z-index:1}
+.vedit-hl .tok-kw{color:var(--btn-accent);font-weight:bold}
+.vedit-hl .tok-str{color:var(--txt-fail)}
+.vedit-hl .tok-com{color:var(--txt-dim-2);font-style:italic}
+.vedit-hl .tok-num{color:var(--icon-dir-2)}
+.vpos{font-size:11px;color:var(--txt-dim);font-variant-numeric:tabular-nums}
+
+/* очередь передач: строка на файл */
+.xfer-list{max-height:124px;overflow:auto;margin-bottom:5px}
+.xrow{display:grid;grid-template-columns:1fr auto;gap:2px 5px;padding:3px 2px;
+  border-bottom:1px solid var(--sh)}
+.xrow:last-child{border-bottom:0}
+.xrow .xname{font-weight:bold;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xrow .xpct{font-variant-numeric:tabular-nums}
+.xrow .xinfo{grid-column:1/-1;color:var(--txt-dim);font-size:10px}
+.xrow .xbtns{display:flex;gap:3px}
+.xbtn{padding:0 5px;background:var(--face);color:var(--btn-fg);font:10px/15px var(--ui-font);
+  cursor:default;border-width:1px;border-style:var(--raised);
+  border-color:var(--hl) var(--sh) var(--sh) var(--hl)}
+.xbtn:active{border-style:var(--sunken);border-color:var(--sh) var(--hl) var(--hl) var(--sh)}
 
 /* ===== УЗКИЙ ЭКРАН ===================================================== */
 @media (max-width:760px){
@@ -477,6 +576,8 @@ html[data-skin=wm][data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
           <button data-act="upload"><span><span class="mark">↑</span> Upload files…</span><span class="sc">Ctrl+U</span></button>
           <button data-act="download"><span><span class="mark">↓</span> Download selected</span><span class="sc">Alt+D</span></button>
           <button data-act="view"><span><span class="mark">V</span> View selected…</span><span class="sc">F3</span></button>
+          <button data-act="search"><span><span class="mark">⌕</span> Search…</span><span class="sc">Ctrl+Shift+F</span></button>
+          <button data-act="archive"><span><span class="mark">▣</span> Archive…</span></button>
           <div class="sep"></div>
           <button data-act="mkdir"><span><span class="mark">+</span> New folder…</span><span class="sc">F7</span></button>
           <button data-act="newfile"><span><span class="mark">·</span> New file…</span></button>
@@ -493,7 +594,15 @@ html[data-skin=wm][data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
           <button data-act="undo"><span><span class="mark">↶</span> Undo last action</span><span class="sc">Ctrl+Z</span></button>
           <div class="sep"></div>
           <button data-act="rename"><span><span class="mark">✎</span> Rename…</span><span class="sc">F2</span></button>
+          <button data-act="batch"><span><span class="mark">✎</span> Batch rename…</span></button>
           <button data-act="delete"><span><span class="mark">✗</span> Delete…</span><span class="sc">F8</span></button>
+          <button data-act="trash"><span><span class="mark">♲</span> Trash / Undo history…</span></button>
+          <div class="sep"></div>
+          <button data-act="copypath"><span><span class="mark">⌁</span> Copy full path</span></button>
+          <button data-act="copyname"><span><span class="mark">⌁</span> Copy name</span></button>
+          <button data-act="props"><span><span class="mark">i</span> Properties / hashes…</span></button>
+          <button data-act="touch"><span><span class="mark">◷</span> Touch now</span></button>
+          <button data-act="chmod"><span><span class="mark">⚙</span> Permissions…</span></button>
           <div class="sep"></div>
           <button data-act="toother"><span><span class="mark">⇉</span> Copy to other pane</span><span class="sc">F5</span></button>
           <button data-act="moveother"><span><span class="mark">→</span> Move to other pane</span><span class="sc">F6</span></button>
@@ -518,11 +627,13 @@ html[data-skin=wm][data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
           <button data-act="theme"><span><span class="mark" data-mark="theme">✓</span> Dark theme</span></button>
           <div class="sep"></div>
           <button data-act="places"><span><span class="mark">★</span> Manage places…</span></button>
+          <button data-act="settings"><span><span class="mark">⚙</span> Settings…</span></button>
         </div>
       </div>
       <div class="menuitem"><span>Help</span>
         <div class="menu">
           <button data-act="help"><span>Keyboard & FTP…</span><span class="sc">F1</span></button>
+          <button data-act="audit"><span>Audit log…</span></button>
           <button data-act="about"><span>About</span></button>
         </div>
       </div>
@@ -546,6 +657,7 @@ html[data-skin=wm][data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
       <button class="btn" data-act="upload"><span class="g">↑</span> Upload</button>
       <button class="btn" data-act="download"><span class="g">↓</span> Download</button>
       <button class="btn" data-act="view"><span class="g">V</span> View</button>
+      <button class="btn" data-act="search" title="Search (Ctrl+Shift+F)"><span class="g">⌕</span> Search</button>
       <button class="btn" data-act="hidden" title="Show/hide dotfiles (Ctrl+H)"><span class="g">.</span> Dotfiles <span class="mark" data-mark="hidden">✓</span></button>
       <span class="sep"></span>
       <button class="btn" data-act="pin"><span class="g">★</span> Pin</button>
@@ -560,6 +672,8 @@ html[data-skin=wm][data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
           <button class="btn pathbtn" data-nav="forward" title="Вперёд (Alt+→)" disabled>→</button>
           <input type="text" class="path txt" data-path spellcheck="false" value="/" title="Путь (Enter — перейти)">
           <button class="btn pathbtn" data-act="up" title="Вверх (Backspace)">↑</button>
+          <input type="text" class="txt filter" data-filter placeholder="Filter…" spellcheck="false" title="Фильтр (Ctrl+F, Esc — сбросить)">
+          <button class="btn pathbtn fclear" data-filter-clear title="Сбросить фильтр">×</button>
         </div>
         <div class="panebody" data-body tabindex="0">
           <div class="listhead">
@@ -580,6 +694,8 @@ html[data-skin=wm][data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
           <button class="btn pathbtn" data-nav="forward" title="Вперёд (Alt+→)" disabled>→</button>
           <input type="text" class="path txt" data-path spellcheck="false" value="/" title="Путь (Enter — перейти)">
           <button class="btn pathbtn" data-act="up" title="Вверх (Backspace)">↑</button>
+          <input type="text" class="txt filter" data-filter placeholder="Filter…" spellcheck="false" title="Фильтр (Ctrl+F, Esc — сбросить)">
+          <button class="btn pathbtn fclear" data-filter-clear title="Сбросить фильтр">×</button>
         </div>
         <div class="panebody" data-body tabindex="0">
           <div class="listhead">
@@ -596,9 +712,17 @@ html[data-skin=wm][data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
 
     <div class="statusbar">
       <span class="s-left" id="fmStatus">Not connected</span>
+      <span class="badge" id="fmMode" hidden></span>
       <span class="s-clock" id="appClock" title="">--:--</span>
       <span class="s-right" id="fmFtp"></span>
       <div class="prog" id="upProg"><i></i></div>
+    </div>
+
+    <div class="xfer" id="xfer" hidden>
+      <div class="xfer-title" id="xferTitle">Uploading…</div>
+      <div class="xfer-list" id="xferList"></div>
+      <div class="xfer-track"><i id="xferFill"></i></div>
+      <div class="xfer-info"><span id="xferInfo">0 B</span><span class="xfer-pct" id="xferPct">0%</span></div>
     </div>
   </section>
 
@@ -618,7 +742,7 @@ html[data-skin=wm][data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
           <button data-vact="saveText" disabled><span><span class="mark">💾</span> Save file</span><span class="sc">Ctrl+S</span></button>
           <div class="sep"></div>
           <button data-vact="open"><span>Open with browser…</span></button>
-          <button data-vact="save"><span>Save as…</span></button>
+          <button data-vact="saveAs"><span>Save as…</span></button>
           <div class="sep"></div>
           <button data-vact="close"><span>Close</span></button>
         </div>
@@ -627,18 +751,163 @@ html[data-skin=wm][data-wmtheme=dark] *{scrollbar-color:#5a5a5a #2b2b2b}
         <div class="menu">
           <button data-vact="reload"><span>Reload</span><span class="sc">Ctrl+R</span></button>
           <button data-vact="wrap"><span><span class="mark" data-vrole="wrapMark">✓</span> Word wrap</span></button>
+          <div class="sep"></div>
+          <button data-vact="find"><span>Find / replace…</span><span class="sc">Ctrl+F</span></button>
+          <button data-vact="goto"><span>Go to line…</span><span class="sc">Ctrl+G</span></button>
+          <div class="sep"></div>
+          <button data-vact="enc-utf8"><span><span class="mark" data-vrole="encMark" data-enc="utf-8">✓</span> UTF-8</span></button>
+          <button data-vact="enc-win1251"><span><span class="mark" data-vrole="encMark" data-enc="windows-1251"></span> Windows-1251</span></button>
+          <button data-vact="enc-latin1"><span><span class="mark" data-vrole="encMark" data-enc="iso-8859-1"></span> Latin-1</span></button>
+          <div class="sep"></div>
+          <button data-vact="eol-lf"><span><span class="mark" data-vrole="eolMark" data-eol="lf">✓</span> EOL: LF</span></button>
+          <button data-vact="eol-crlf"><span><span class="mark" data-vrole="eolMark" data-eol="crlf"></span> EOL: CRLF</span></button>
         </div>
       </div>
     </div>
     <div class="vbar">
       <button class="btn" data-vrole="editBtn" data-vact="edit" disabled><span class="g">✎</span> <span data-vrole="editLabel">Edit</span></button>
       <button class="btn" data-vrole="saveBtn" data-vact="saveText" disabled><span class="g">💾</span> Save</button>
+      <span class="vpos" data-vrole="pos">Ln 1, Col 1</span>
       <span class="vspacer"></span>
       <span class="dim" data-vrole="dirty"></span>
+    </div>
+    <div class="findbar" data-vrole="findbar" hidden>
+      <label>Find</label>
+      <input type="text" class="txt" data-vrole="find" spellcheck="false">
+      <label>Replace</label>
+      <input type="text" class="txt" data-vrole="replace" spellcheck="false">
+      <button class="btn" data-vact="findNext">Find</button>
+      <button class="btn" data-vact="replaceOne">Replace</button>
+      <button class="btn" data-vact="replaceAll">Replace all</button>
+      <button class="btn" data-vact="closeFind">×</button>
     </div>
     <div class="vbody" data-vrole="body"><div class="vmeta">Nothing to view</div></div>
     <div class="statusbar"><span class="s-left" data-vrole="meta"></span>
       <span class="s-right" data-vrole="size"></span></div>
+  </section>
+
+  <!-- ===== ПОИСК ===== -->
+  <section class="appwindow" id="winSearch" style="width:640px;height:390px" hidden>
+    <div class="titlebar"><span class="ticon">⌕</span><span class="ttext">Search files</span>
+      <span class="winbtns"><button class="winbtn" data-win="close" title="Закрыть">×</button></span>
+    </div>
+    <div class="winbody">
+      <div class="formrow"><label for="searchPath">Path</label>
+        <input type="text" class="txt" id="searchPath" spellcheck="false" value="/"></div>
+      <div class="formrow"><label for="searchQ">Query</label>
+        <input type="text" class="txt" id="searchQ" spellcheck="false">
+        <select id="searchMode"><option value="name">name</option><option value="content">content</option></select>
+        <label><input type="checkbox" id="searchRegex"> Regex</label>
+        <label><input type="checkbox" id="searchHidden"> Hidden</label>
+        <button class="btn primary" id="searchGo"><span class="g">⌕</span> Search</button></div>
+      <div class="hint" id="searchInfo"></div>
+      <div class="datalist four" id="searchResults"></div>
+      <div class="hint">Двойной клик: открыть файл / перейти к найденному в другой панели.</div>
+    </div>
+  </section>
+
+  <!-- ===== ПАКЕТНОЕ ПЕРЕИМЕНОВАНИЕ ===== -->
+  <section class="appwindow" id="winBatch" style="width:580px;height:380px" hidden>
+    <div class="titlebar"><span class="ticon">✎</span><span class="ttext">Batch rename</span>
+      <span class="winbtns"><button class="winbtn" data-win="close" title="Закрыть">×</button></span>
+    </div>
+    <div class="winbody">
+      <div class="formrow"><label for="batchFind">Find</label><input type="text" class="txt" id="batchFind" spellcheck="false">
+        <label for="batchReplace">Replace</label><input type="text" class="txt" id="batchReplace" spellcheck="false"></div>
+      <div class="formrow"><label for="batchPattern">Pattern</label><input type="text" class="txt" id="batchPattern" spellcheck="false" placeholder="photo-{n}{ext}">
+        <label for="batchStart">Start</label><input type="number" id="batchStart" value="1" min="0"></div>
+      <div class="hint">В шаблоне: <code>{n}</code> — номер, <code>{name}</code> — старое имя, <code>{ext}</code> — расширение.</div>
+      <div class="datalist two" id="batchPreview"></div>
+      <div class="hint" id="batchInfo"></div>
+      <div class="formrow"><span class="vspacer" style="flex:1"></span>
+        <button class="btn" id="batchRefresh">Preview</button>
+        <button class="btn primary" id="batchApply"><span class="g">✓</span> Apply</button></div>
+    </div>
+  </section>
+
+  <!-- ===== АРХИВЫ ===== -->
+  <section class="appwindow" id="winArchive" style="width:600px;height:380px" hidden>
+    <div class="titlebar"><span class="ticon">▣</span><span class="ttext">Archives</span>
+      <span class="winbtns"><button class="winbtn" data-win="close" title="Закрыть">×</button></span>
+    </div>
+    <div class="winbody">
+      <div class="formrow"><label for="arcPath">Archive</label><input type="text" class="txt" id="arcPath" spellcheck="false">
+        <button class="btn" id="arcBrowse">Browse</button></div>
+      <div class="formrow"><label for="arcDest">Destination</label><input type="text" class="txt" id="arcDest" spellcheck="false"></div>
+      <div class="formrow"><label for="arcName">New name</label><input type="text" class="txt" id="arcName" spellcheck="false">
+        <select id="arcFormat"><option value="zip">zip</option><option value="tar.gz">tar.gz</option><option value="tar">tar</option></select>
+        <button class="btn" id="arcCreate">Create</button>
+        <button class="btn primary" id="arcExtract">Extract</button></div>
+      <div class="datalist two" id="arcList"></div>
+      <div class="hint" id="arcInfo"></div>
+    </div>
+  </section>
+
+  <!-- ===== СВОЙСТВА И ХЭШИ ===== -->
+  <section class="appwindow" id="winProps" style="width:560px;height:380px" hidden>
+    <div class="titlebar"><span class="ticon">i</span><span class="ttext">Properties & hashes</span>
+      <span class="winbtns"><button class="winbtn" data-win="close" title="Закрыть">×</button></span>
+    </div>
+    <div class="winbody">
+      <div class="formrow"><label for="propsPath">Path</label><input type="text" class="txt" id="propsPath" spellcheck="false"></div>
+      <div class="formrow">
+        <button class="btn primary" id="propsGet">Properties</button>
+        <button class="btn" id="propsSha">SHA-256</button>
+        <button class="btn" id="propsMd5">MD5</button>
+        <button class="btn" id="propsCompare">Compare (2 files)</button></div>
+      <textarea class="outtext" id="propsText" readonly spellcheck="false"></textarea>
+    </div>
+  </section>
+
+  <!-- ===== КОРЗИНА И ИСТОРИЯ ===== -->
+  <section class="appwindow" id="winTrash" style="width:680px;height:410px" hidden>
+    <div class="titlebar"><span class="ticon">♲</span><span class="ttext">Trash / Undo history</span>
+      <span class="winbtns"><button class="winbtn" data-win="close" title="Закрыть">×</button></span>
+    </div>
+    <div class="winbody">
+      <div class="formrow"><button class="btn" id="trashRefresh">Refresh</button></div>
+      <div class="split">
+        <div><div class="cap">Trash</div><div class="datalist four" id="trashList"></div>
+          <div class="formrow"><button class="btn" id="trashRestore">Restore</button>
+            <button class="btn" id="trashPurge">Purge</button></div></div>
+        <div><div class="cap">History</div><div class="datalist two" id="historyList"></div>
+          <div class="formrow"><button class="btn" id="histUndo">Undo</button>
+            <button class="btn" id="histRedo">Redo</button></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== ЖУРНАЛ ДОСТУПА ===== -->
+  <section class="appwindow" id="winAudit" style="width:680px;height:400px" hidden>
+    <div class="titlebar"><span class="ticon">≡</span><span class="ttext">Audit log</span>
+      <span class="winbtns"><button class="winbtn" data-win="close" title="Закрыть">×</button></span>
+    </div>
+    <div class="winbody">
+      <div class="formrow"><button class="btn" id="auditRefresh">Refresh</button>
+        <span class="hint" id="auditInfo"></span></div>
+      <div class="datalist four" id="auditList"></div>
+    </div>
+  </section>
+
+  <!-- ===== НАСТРОЙКИ (только UI) ===== -->
+  <section class="appwindow" id="winSettings" style="width:460px;height:420px" hidden>
+    <div class="titlebar"><span class="ticon">⚙</span><span class="ttext">Settings</span>
+      <span class="winbtns"><button class="winbtn" data-win="close" title="Закрыть">×</button></span>
+    </div>
+    <div class="winbody">
+      <div class="formrow"><label for="setFontSize">List font size</label>
+        <input type="number" id="setFontSize" min="10" max="24" value="13" style="width:64px"></div>
+      <div class="formrow"><label><input type="checkbox" id="setConfirm"> Confirm delete</label></div>
+      <div class="formrow"><label><input type="checkbox" id="setHidden"> Show hidden files</label></div>
+      <div class="formrow"><label><input type="checkbox" id="setRemember"> Remember layout</label></div>
+      <div class="formrow"><button class="btn" data-act="skin" id="setSkinBtn">WindowMaker skin</button>
+        <button class="btn" data-act="theme" id="setThemeBtn">Dark theme</button></div>
+      <div class="formrow wm-only"><button class="btn" data-act="wmgray">NeXT gray</button>
+        <button class="btn" data-act="wmsteel">SteelBlue</button>
+        <button class="btn" data-act="wmdark">Dark scheme</button></div>
+      <div class="hint" id="setServerInfo"></div>
+      <div class="hint">Настройки хранятся в этом браузере; серверный config.json не меняется.</div>
+    </div>
   </section>
 
   <!-- ===== ОКНО ЗАКРЕПЛЁННЫХ МЕСТ ===== -->

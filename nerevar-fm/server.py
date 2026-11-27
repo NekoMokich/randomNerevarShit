@@ -35,7 +35,8 @@ JSON -> 400 {"error":"..."}). Пути — КАК ПУТИ ВНУТРИ корн
 симлинк наружу -> 403), ~ не расширяется. В ответах всегда отдаётся
 КЛИЕНТСКИЙ путь (с "/"), а не путь на диске; при ROOT="/" поведение
 как с абсолютными путями:
-  GET  /api/status   -> {"root","ftp":{"enabled","port","user"},"ok"}
+  GET  /api/status   -> {"root","ftp":{"enabled","port","user"},"ok",
+                         "readOnly","sessionTtl","version","role"?}
   GET  /api/list?path=/abs/dir
                     -> {"path","name","parent","entries":[...],"free","total"}
                         entries: папки потом файлы, внутри по имени без
@@ -53,9 +54,11 @@ JSON -> 400 {"error":"..."}). Пути — КАК ПУТИ ВНУТРИ корн
                         права исходного файла сохраняются; симлинк внутри
                         корня перезаписывает свою цель, а не сам себя)
   POST /api/rename   {"from","to"}     -> {"ok"}; цель есть -> 409
-  POST /api/delete   {"items":[...]}   -> {"ok","deleted","errors"}
+  POST /api/delete   {"items":[...],"trash"?:bool}
+                                       -> {"ok","deleted","trashed","errors"}
                                            (папки рекурсивно, ошибка одного
-                                           не роняет остальные)
+                                           не роняет остальные; trash=true
+                                           кладёт в корзину вне root)
   POST /api/move     {"items","dest"}  -> {"ok","moved","errors"}
   POST /api/copy     {"items","dest"}   -> {"ok","copied","errors"}
                                            (копирование рекурсивное, цель
@@ -96,6 +99,19 @@ JSON -> 400 {"error":"..."}). Пути — КАК ПУТИ ВНУТРИ корн
                         audio/*, video/*; всё прочее (html/xml/js/...) ->
                         application/octet-stream + attachment. Range тоже.
 
+Дополнительные API (все mutate-маршруты требуют записи и попадают в аудит):
+  GET  /api/search?path=&q=&mode=name|content&regex=&hidden=&limit=
+  POST /api/batchrename {"items":[{"from","to"}]}, /api/touch, /api/chmod
+  GET  /api/archive/list?path= ; POST /api/archive/extract, /api/archive/create
+  GET  /api/hash?path=&algo=sha256|md5|sha1 ; GET /api/properties?path=
+  GET  /api/trash ; POST /api/trash/restore, /api/trash/purge
+  GET  /api/undo/history ; POST /api/redo
+  GET  /api/upload/status?uploadId= ; POST /api/upload/chunk (raw body),
+       POST /api/upload/cancel — докачка кусками по 1 МБ
+  GET  /api/audit?limit= — последние действия (без паролей)
+Корзина, снимки Undo и незавершённые загрузки лежат вне root и скрыты
+от API/FTP. view_password (только в config.json) даёт роль «только чтение».
+
 Прочее: ThreadingHTTPServer (большой upload не блокирует список файлов),
 лог запросов форматом [server.py pid=N] 127.0.0.1 - "GET / HTTP/1.1" 200 -,
 CORS не нужен (панель и API на одном порту; флаг --cors всё же есть).
@@ -104,8 +120,8 @@ FTP (реализация своя, только socketserver):
   корень FTP = корень HTTP (флаг --root); пути клиента трактуются как
   пути внутри корня, выход за него через .. -> 550.
   Команды: USER PASS SYST FEAT OPTS(PWD/UTF8 ON) PWD CWD CDUP TYPE(A/I)
-  PASV EPSV PORT EPRT LIST NLST MLSD RETR STOR APPE DELE MKD XMKD RMD
-  XRMD RNFR RNTO SIZE MDTM REST NOOP QUIT HELP STAT.
+  PASV EPSV PORT EPRT LIST NLST MLSD MLST RETR STOR APPE DELE MKD XMKD RMD
+  XRMD RNFR RNTO SIZE MDTM REST NOOP LOGOUT QUIT HELP STAT.
   Логин: USER принимает любое имя, пароль сверяется с общим паролем;
   5 неудач подряд на одном соединении -> 530 + 421 и закрытие.
   Пасивный режим слушает на IP контрольного соединения и случайном порту.
@@ -117,10 +133,13 @@ FTP (реализация своя, только socketserver):
   config.json (рядом со скриптом или --config PATH) читается при старте;
   приоритет: флаги > config.json > встроенные дефолты. Ключи: password,
   http_host, http_port, ftp_enabled, ftp_host, ftp_port, ftp_user, root,
-  places.
+  places, ftp_pasv_min, ftp_pasv_max, ftp_max_clients, read_only,
+  view_password, session_ttl, audit_max.
   Флаги: --host --port --root --password --ftp-port --ftp-user --no-ftp
+  --ftp-pasv-min --ftp-pasv-max --ftp-max-clients --read-only --session-ttl
   --config PATH --pidfile PATH (по умолчанию server.pid рядом со скриптом)
   --no-pidfile --cors
+  (флага для view_password нет: это секрет только из config.json)
   Пароль нигде не задан -> генерируется случайный из 12 символов и
   печатается в лог крупным блоком; пароль == "changeme" -> громкое
   предупреждение «СМЕНИ ПАРОЛЬ» (config.json в git). Пароль никогда
@@ -135,7 +154,9 @@ FTP (реализация своя, только socketserver):
 """
 
 import argparse
+import collections
 import errno
+import hashlib
 import hmac
 import json
 import mimetypes
@@ -148,9 +169,11 @@ import socket
 import socketserver
 import stat
 import sys
+import tarfile
 import tempfile
 import threading
 import time
+import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
@@ -181,6 +204,15 @@ MAX_EDIT = 8 * 1024 * 1024     # потолок для сохранения те
 CHUNK = 64 * 1024              # кусок стриминга (upload/download/чтение)
 MAX_DRAIN = 8 * 1024 * 1024    # сколько «лишнего» тела дочитываем вхолостую
 
+SERVER_VERSION = "2.0"         # версия API/сервера, отдаётся в /api/status
+MAX_SEARCH_DEPTH = 32          # потолок глубины рекурсии поиска
+MAX_SEARCH_TIME = 10           # потолок времени поиска, секунд
+SEARCH_LIMIT_DEFAULT = 500
+SEARCH_LIMIT_MAX = 2000
+MAX_CONTENT_FILE = 8 * 1024 * 1024     # файлы больше в поиске не читаем
+MAX_ARCHIVE_TOTAL = 512 * 1024 * 1024  # потолок суммарного размера архива
+MAX_AUDIT_DETAIL = 300         # длина детали в журнале
+
 # У каждого запуска свой номер: пишем его в каждую строку лога и в pidfile,
 # чтобы всегда было видно, какой это процесс и как его остановить.
 PID = os.getpid()
@@ -210,9 +242,59 @@ CONFIG_DEFAULTS = {
     "ftp_host": "0.0.0.0",
     "ftp_port": 2121,
     "ftp_user": "nerevar",
+    "ftp_pasv_min": 0,
+    "ftp_pasv_max": 0,
+    "ftp_max_clients": 0,
+    "read_only": False,
+    "view_password": "",
+    "session_ttl": TOKEN_TTL,
+    "audit_max": 500,
     "root": "/",
     "places": DEFAULT_PLACES,
 }
+
+# Журнал действий:bounded deque (старые записи вытесняются сами), одна
+# блокировка на запись/чтение. Лимит настраивается в main() через audit_max.
+AUDIT = collections.deque(maxlen=int(CONFIG_DEFAULTS["audit_max"]))
+AUDIT_LOCK = threading.Lock()
+
+# Счётчик FTP-подключений (ftp_max_clients)
+FTP_CLIENTS = 0
+FTP_CLIENTS_LOCK = threading.Lock()
+
+# Блокировки служебных каталогов
+TRASH_LOCK = threading.Lock()
+UPLOAD_LOCK = threading.Lock()
+
+
+def configure_audit(max_items):
+    """Задать ёмкость журнала из конфига (вызывается при старте)."""
+    global AUDIT
+    try:
+        size = int(max_items)
+    except (TypeError, ValueError):
+        size = int(CONFIG_DEFAULTS["audit_max"])
+    if size < 1:
+        size = 1
+    with AUDIT_LOCK:
+        AUDIT = collections.deque(maxlen=size)
+
+
+def audit(ip, action, path, status, detail=""):
+    """Одна запись журнала. Пароли сюда никогда не попадают."""
+    detail = str(detail)
+    if len(detail) > MAX_AUDIT_DETAIL:
+        detail = detail[:MAX_AUDIT_DETAIL] + "..."
+    item = {
+        "ts": time.time(),
+        "ip": ip,
+        "action": str(action),
+        "path": str(path),
+        "status": status,
+        "detail": detail,
+    }
+    with AUDIT_LOCK:
+        AUDIT.append(item)
 
 
 # --------------------------------------------------------------------------- #
@@ -287,8 +369,18 @@ def path_inside(root, path):
 UNDO_DIR = os.path.join(tempfile.gettempdir(),
                         "nerevar-fm-undo-%s" % (os.getuid() if hasattr(os, "getuid") else 0))
 UNDO_STACK = []
+REDO_STACK = []
 UNDO_LOCK = threading.Lock()
 UNDO_MAX = 50
+UNDO_ROOT = None        # корень ESC, нужен для снимков «после» (redo)
+
+# Корзина и очередь докачки — тоже вне корня (при ROOT="/" это особенно
+# важно: иначе внутренние файлы были бы видны через API/FTP).
+TRASH_DIR = os.path.join(tempfile.gettempdir(),
+                         "nerevar-fm-trash-%s" % (os.getuid() if hasattr(os, "getuid") else 0))
+TRASH_INDEX = os.path.join(TRASH_DIR, "index.json")
+UPLOAD_DIR = os.path.join(tempfile.gettempdir(),
+                          "nerevar-fm-uploads-%s" % (os.getuid() if hasattr(os, "getuid") else 0))
 
 
 def undo_dir():
@@ -296,12 +388,42 @@ def undo_dir():
     return UNDO_DIR
 
 
-def undo_hidden(server_path):
-    """True, если путь ведёт во внутреннее хранилище отмены."""
+def _inside_dir(base, server_path):
     try:
-        return path_inside(UNDO_DIR, server_path)
+        return path_inside(base, server_path)
     except Exception:
         return False
+
+
+def undo_hidden(server_path):
+    """True, если путь ведёт во внутреннее хранилище отмены."""
+    return _inside_dir(UNDO_DIR, server_path)
+
+
+def trash_dir():
+    os.makedirs(TRASH_DIR, mode=0o700, exist_ok=True)
+    return TRASH_DIR
+
+
+def trash_hidden(server_path):
+    """True, если путь ведёт в корзину (скрыта и от API, и от FTP)."""
+    return _inside_dir(TRASH_DIR, server_path)
+
+
+def upload_dir():
+    os.makedirs(UPLOAD_DIR, mode=0o700, exist_ok=True)
+    return UPLOAD_DIR
+
+
+def upload_hidden(server_path):
+    """True, если путь ведёт во внутреннюю очередь загрузки."""
+    return _inside_dir(UPLOAD_DIR, server_path)
+
+
+def internal_hidden(server_path):
+    """Любое из служебных хранилищ — нельзя выдавать и нельзя трогать."""
+    return undo_hidden(server_path) or trash_hidden(server_path) \
+        or upload_hidden(server_path)
 
 
 def snapshot_path(client, server_path):
@@ -321,17 +443,96 @@ def snapshot_path(client, server_path):
 
 
 def undo_cleanup(entry):
-    for s in entry.get("restore", []):
-        shutil.rmtree(os.path.dirname(s["snap"]), ignore_errors=True)
+    for key in ("restore", "after"):
+        for s in entry.get(key, []):
+            shutil.rmtree(os.path.dirname(s["snap"]), ignore_errors=True)
 
 
-def undo_push(label, remove=None, restore=None):
-    entry = {"label": label, "remove": remove or [], "restore": restore or []}
+def undo_capture_after(entry):
+    """Снимок состояния ПОСЛЕ операции — он нужен для повтора (redo).
+
+    remove — новые пути операции (создание/переименование), restore —
+    старое содержимое перезаписанных/удалённых путей. Если путь из restore
+    после операции отсутствует, при повторе его надо снова удалить."""
+    root = UNDO_ROOT
+    if not root:
+        return
+    clients = [(raw, True) for raw in entry.get("remove", [])]
+    clients += [(s.get("client"), False) for s in entry.get("restore", [])]
+    seen = set()
+    after = []
+    redo_remove = []
+    for client, is_remove in clients:
+        if not isinstance(client, str) or client in seen:
+            continue
+        seen.add(client)
+        got = undo_server_path(client, root)
+        if got is None:
+            continue
+        _client, server = got
+        if internal_hidden(server):
+            continue
+        if os.path.lexists(server):
+            try:
+                after.append(snapshot_path(client, server))
+            except OSError:
+                pass
+        elif not is_remove:
+            redo_remove.append(client)
+    entry["after"] = after
+    entry["redo_remove"] = redo_remove
+
+
+def undo_push(label, remove=None, restore=None, clear_redo=True,
+              capture_after=True):
+    """Добавить запись отмены.
+
+    Первый аргумент — обычная подпись (как раньше) либо уже готовая запись
+    с id/time (внутренний перенос между стеками). clear_redo=True только для
+    новых действий: переносы между UNDO/REDO его сбрасывать не должны."""
+    if isinstance(label, dict):
+        entry = label
+        entry.setdefault("id", secrets.token_hex(8))
+        entry.setdefault("time", time.time())
+        entry.setdefault("label", "")
+        entry.setdefault("remove", [])
+        entry.setdefault("restore", [])
+        entry.setdefault("after", [])
+        entry.setdefault("redo_remove", [])
+    else:
+        entry = {
+            "id": secrets.token_hex(8),
+            "time": time.time(),
+            "label": str(label),
+            "remove": remove or [],
+            "restore": restore or [],
+            "after": [],
+            "redo_remove": [],
+        }
+        if capture_after:
+            undo_capture_after(entry)
     with UNDO_LOCK:
+        if clear_redo:
+            for old in REDO_STACK:
+                undo_cleanup(old)
+            del REDO_STACK[:]
         UNDO_STACK.append(entry)
         while len(UNDO_STACK) > UNDO_MAX:
             undo_cleanup(UNDO_STACK.pop(0))
     return entry
+
+
+def redo_push(entry):
+    """Перенести запись в стек повтора, не очищая его как при новом действии."""
+    with UNDO_LOCK:
+        REDO_STACK.append(entry)
+        while len(REDO_STACK) > UNDO_MAX:
+            undo_cleanup(REDO_STACK.pop(0))
+
+
+def undo_push_existing(entry):
+    """Вернуть уже существующую запись в стек отмены (без clear_redo)."""
+    return undo_push(entry, clear_redo=False)
 
 
 def client_for_server(root, root_real, server):
@@ -355,7 +556,7 @@ def undo_server_path(raw, root):
     server = os.path.abspath(os.path.join(root, client.lstrip("/")))
     if not path_inside(root, server) or server == root:
         return None
-    if undo_hidden(server):
+    if internal_hidden(server):
         return None
     return client, server
 
@@ -448,6 +649,67 @@ def write_json_atomic(path, obj):
         except OSError:
             pass
         raise
+
+
+def id_valid(value):
+    """Идентификатор загрузки/корзины: только hex, разумной длины."""
+    if not isinstance(value, str) or not 8 <= len(value) <= 64:
+        return False
+    return re.match(r"^[0-9a-fA-F]+$", value) is not None
+
+
+def safe_rel_path(raw):
+    """Безопасный относительный путь с подпапками: sub/dir/file.txt.
+
+    Запрещены абсолютные пути, диски, '..', пустые компоненты и NUL."""
+    if not isinstance(raw, str) or not raw or "\x00" in raw:
+        return None
+    raw = raw.replace("\\", "/")
+    if raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+        return None
+    parts = []
+    for comp in raw.split("/"):
+        if comp in ("", "."):
+            continue
+        if comp == "..":
+            return None
+        parts.append(comp)
+    if not parts:
+        return None
+    rel = os.path.join(*parts)
+    if os.path.isabs(rel) or rel == ".." or rel.startswith(".." + os.sep):
+        return None
+    return rel
+
+
+def load_trash_index():
+    """Список метаданных корзины; любые повреждения = пустая корзина."""
+    try:
+        with open(TRASH_INDEX, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict):
+        data = data.get("items")
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def save_trash_index(items):
+    write_json_atomic(TRASH_INDEX, {"items": items})
+
+
+def trash_entry_path(meta):
+    """Путь внутри корзины для записи; None, если метаданные подозрительны."""
+    item_id = meta.get("id")
+    name = meta.get("name")
+    if not id_valid(item_id) or not isinstance(name, str) or not name:
+        return None
+    name = os.path.basename(name.replace("\\", "/"))
+    if name in ("", ".", "..") or "\x00" in name:
+        return None
+    return os.path.join(TRASH_DIR, item_id, name)
 
 
 # --------------------------------------------------------------------------- #
@@ -631,10 +893,15 @@ def parse_range(rng, size):
 # --------------------------------------------------------------------------- #
 # Маршруты API по методам — чтобы различать 404 (нет такого) и 405 (не тот метод)
 API_GET = {"/api/status", "/api/list", "/api/places", "/api/download",
-           "/api/inline"}
+           "/api/inline", "/api/audit", "/api/search", "/api/archive/list",
+           "/api/hash", "/api/properties", "/api/trash", "/api/undo/history",
+           "/api/upload/status"}
 API_POST = {"/api/login", "/api/mkdir", "/api/newfile", "/api/rename",
             "/api/delete", "/api/move", "/api/copy", "/api/places",
-            "/api/upload", "/api/write", "/api/undo"}
+            "/api/upload", "/api/write", "/api/undo", "/api/batchrename",
+            "/api/touch", "/api/chmod", "/api/archive/extract",
+            "/api/archive/create", "/api/trash/restore", "/api/trash/purge",
+            "/api/redo", "/api/upload/chunk", "/api/upload/cancel"}
 API_DELETE = {"/api/places"}
 API_ROUTES = API_GET | API_POST | API_DELETE
 
@@ -656,6 +923,8 @@ def make_handler(cfg):
     # ВНУТРИ корня (см. _api_resolve). ROOT_REAL — для проверки симлинков.
     ROOT = cfg["root"]
     ROOT_REAL = os.path.realpath(ROOT)
+    global UNDO_ROOT
+    UNDO_ROOT = ROOT
 
     class FMHandler(BaseHTTPRequestHandler):
         server_version = "NerevarFM/1.0"
@@ -676,6 +945,7 @@ def make_handler(cfg):
             Access-Control-Allow-Origin (нужен только для file://)."""
             payload = data if isinstance(data, bytes) \
                 else data.encode("utf-8")
+            self._last_status = code      # для журнала действий
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
@@ -758,19 +1028,62 @@ def make_handler(cfg):
             return data, None
 
         def _auth_ok(self):
-            """Есть ли валидный токен: заголовок X-Auth-Token или ?token="""
+            """Валидный токен (X-Auth-Token или ?token), роль и режим доступа.
+
+            Каждый успешный запрос с токеном сдвигает срок его жизни ещё на
+            session_ttl (idle-timeout). Токены живут только в памяти."""
             token = self.headers.get("X-Auth-Token") or self._q("token")
             if not token:
                 return False
             now = time.time()
             with TOKENS_LOCK:
-                exp = TOKENS.get(token)
-                if exp is None:
+                info = TOKENS.get(token)
+                if info is None:
                     return False
-                if exp <= now:
+                exp = info.get("exp") if isinstance(info, dict) else info
+                if exp is None or exp <= now:
                     del TOKENS[token]
                     return False
-                return True
+                role = info.get("role", "admin") if isinstance(info, dict) \
+                    else "admin"
+                if role not in ("admin", "view"):
+                    role = "admin"
+                if not isinstance(info, dict):
+                    info = {"exp": exp, "role": role}
+                info["exp"] = now + int(cfg["session_ttl"])
+                TOKENS[token] = info
+            self.role = role
+            self.read_only_access = bool(cfg["read_only"]) or role == "view"
+            return True
+
+        def _require_write(self):
+            """Блокирует изменения в read-only режиме и для роли view."""
+            if getattr(self, "read_only_access", False):
+                self._err(403, "read-only mode")
+                return False
+            return True
+
+        def _audit_http(self, action, path, detail=""):
+            audit(self.client_address[0], action, path,
+                  getattr(self, "_last_status", None) or 500, detail)
+
+        @staticmethod
+        def _post_action(path):
+            names = {
+                "/api/login": "Login", "/api/mkdir": "Mkdir",
+                "/api/newfile": "Newfile", "/api/write": "Write",
+                "/api/rename": "Rename", "/api/batchrename": "Batchrename",
+                "/api/delete": "Delete", "/api/move": "Move",
+                "/api/copy": "Copy", "/api/touch": "Touch",
+                "/api/chmod": "Chmod", "/api/places": "Places",
+                "/api/upload": "Upload", "/api/upload/chunk": "Upload chunk",
+                "/api/upload/cancel": "Upload cancel", "/api/undo": "Undo",
+                "/api/redo": "Redo", "/api/archive/extract": "Extract",
+                "/api/archive/create": "Archive create",
+                "/api/trash/restore": "Trash restore",
+                "/api/trash/purge": "Trash purge",
+            }
+            return names.get(path, "POST " + path)
 
         # --- маршрутизация ------------------------------------------------- #
         def do_GET(self):
@@ -794,6 +1107,22 @@ def make_handler(cfg):
                     return self._api_file(inline=False)
                 if path == "/api/inline":
                     return self._api_file(inline=True)
+                if path == "/api/audit":
+                    return self._api_audit()
+                if path == "/api/search":
+                    return self._api_search()
+                if path == "/api/archive/list":
+                    return self._api_archive_list()
+                if path == "/api/hash":
+                    return self._api_hash()
+                if path == "/api/properties":
+                    return self._api_properties()
+                if path == "/api/trash":
+                    return self._api_trash_list()
+                if path == "/api/undo/history":
+                    return self._api_undo_history()
+                if path == "/api/upload/status":
+                    return self._api_upload_status()
                 return self._err(404, "not found")
             self._static(path)
 
@@ -803,58 +1132,93 @@ def make_handler(cfg):
                 self._drop_body()
                 return self._respond(404, "Not found",
                                     "text/plain; charset=utf-8")
-            if path not in API_POST:
-                self._drop_body()
-                code = 405 if path in API_ROUTES else 404
-                msg = "method not allowed" if code == 405 else "not found"
-                return self._err(code, msg)
-            if path != "/api/login" and not self._auth_ok():
-                self._drop_body()
-                return self._err(401, "unauthorized")
-            if path == "/api/login":
-                return self._api_login()
-            if path == "/api/upload":
-                return self._api_upload()
-            if path == "/api/write":
-                return self._api_write()
-            data, err = self._read_json_body()
-            if err is not None:
-                if err[0] != 413:
-                    self._drop_body()
-                return self._err(err[0], err[1])
+            self._last_status = None
+            self._audit_detail = ""
             try:
-                if path == "/api/mkdir":
-                    return self._api_mkdir(data)
-                if path == "/api/newfile":
-                    return self._api_newfile(data)
-                if path == "/api/rename":
-                    return self._api_rename(data)
-                if path == "/api/delete":
-                    return self._api_delete(data)
-                if path == "/api/move":
-                    return self._api_transfer(data, move=True)
-                if path == "/api/copy":
-                    return self._api_transfer(data, move=False)
-                if path == "/api/undo":
-                    return self._api_undo()
-                if path == "/api/places":
-                    return self._api_places_post(data)
-            except _HTTPError as exc:
-                return self._err(exc.code, exc.message)
-            return self._err(404, "not found")
+                if path not in API_POST:
+                    self._drop_body()
+                    code = 405 if path in API_ROUTES else 404
+                    msg = "method not allowed" if code == 405 else "not found"
+                    return self._err(code, msg)
+                if path != "/api/login" and not self._auth_ok():
+                    self._drop_body()
+                    return self._err(401, "unauthorized")
+                # Тело этих маршрутов — не JSON (или его вообще нет)
+                if path == "/api/login":
+                    return self._api_login()
+                if path == "/api/upload":
+                    return self._api_upload()
+                if path == "/api/upload/chunk":
+                    try:
+                        return self._api_upload_chunk()
+                    except _HTTPError as exc:
+                        return self._err(exc.code, exc.message)
+                if path == "/api/upload/cancel":
+                    return self._api_upload_cancel()
+                if path == "/api/redo":
+                    return self._api_redo()
+                if path == "/api/write":
+                    return self._api_write()
+                data, err = self._read_json_body()
+                if err is not None:
+                    if err[0] != 413:
+                        self._drop_body()
+                    return self._err(err[0], err[1])
+                try:
+                    if path == "/api/mkdir":
+                        return self._api_mkdir(data)
+                    if path == "/api/newfile":
+                        return self._api_newfile(data)
+                    if path == "/api/rename":
+                        return self._api_rename(data)
+                    if path == "/api/delete":
+                        return self._api_delete(data)
+                    if path == "/api/move":
+                        return self._api_transfer(data, move=True)
+                    if path == "/api/copy":
+                        return self._api_transfer(data, move=False)
+                    if path == "/api/batchrename":
+                        return self._api_batchrename(data)
+                    if path == "/api/touch":
+                        return self._api_touch(data)
+                    if path == "/api/chmod":
+                        return self._api_chmod(data)
+                    if path == "/api/archive/extract":
+                        return self._api_archive_extract(data)
+                    if path == "/api/archive/create":
+                        return self._api_archive_create(data)
+                    if path == "/api/trash/restore":
+                        return self._api_trash_restore(data)
+                    if path == "/api/trash/purge":
+                        return self._api_trash_purge(data)
+                    if path == "/api/undo":
+                        return self._api_undo()
+                    if path == "/api/places":
+                        return self._api_places_post(data)
+                except _HTTPError as exc:
+                    return self._err(exc.code, exc.message)
+                return self._err(404, "not found")
+            finally:
+                self._audit_http(self._post_action(path), path,
+                                 getattr(self, "_audit_detail", ""))
 
         def do_DELETE(self):
             path = urlsplit(self.path).path
-            if path not in API_DELETE:
-                known = path in API_ROUTES
-                return self._err(405 if known else 404,
-                                 "method not allowed" if known
-                                 else "not found")
-            if not self._auth_ok():
-                return self._err(401, "unauthorized")
-            if path == "/api/places":
-                return self._api_places_delete()
-            return self._err(404, "not found")
+            self._last_status = None
+            try:
+                if path not in API_DELETE:
+                    known = path in API_ROUTES
+                    return self._err(405 if known else 404,
+                                     "method not allowed" if known
+                                     else "not found")
+                if not self._auth_ok():
+                    return self._err(401, "unauthorized")
+                if path == "/api/places":
+                    return self._api_places_delete()
+                return self._err(404, "not found")
+            finally:
+                if path.startswith("/api/"):
+                    self._audit_http("Delete places", path)
 
         def do_OPTIONS(self):
             # preflight для --cors (панель с file:// и чужого origin)
@@ -928,23 +1292,36 @@ def make_handler(cfg):
                     self._drop_body()
                 return self._err(err[0], err[1])
             password = data.get("password")
-            good = isinstance(password, str) and hmac.compare_digest(
+            good_admin = isinstance(password, str) and hmac.compare_digest(
                 password.encode("utf-8"), cfg["password"].encode("utf-8"))
-            if not good:
+            view_pw = cfg["view_password"]
+            good_view = bool(view_pw) and isinstance(password, str) and \
+                hmac.compare_digest(password.encode("utf-8"),
+                                    str(view_pw).encode("utf-8"))
+            if not good_admin and not good_view:
                 with LOGIN_LOCK:
                     LOGIN_FAILS.setdefault(ip, []).append(now)
                 return self._err(401, "bad password")
+            role = "admin" if good_admin else "view"
+            self._audit_detail = "role=%s" % role   # пароль в лог не идёт
+            ttl = int(cfg["session_ttl"])
             token = secrets.token_hex(16)          # 32 hex-символа
             with TOKENS_LOCK:
-                dead = [k for k, exp in TOKENS.items() if exp <= now]
+                def _exp(key):
+                    info = TOKENS[key]
+                    return info.get("exp") if isinstance(info, dict) else info
+
+                dead = [k for k in TOKENS if _exp(k) is None or _exp(k) <= now]
                 for key in dead:
                     del TOKENS[key]
                 while len(TOKENS) >= TOKEN_MAX:
                     # лимит исчерпан — выкидываем самый старый токен
-                    oldest = min(TOKENS, key=TOKENS.get)
+                    oldest = min(TOKENS, key=_exp)
                     del TOKENS[oldest]
-                TOKENS[token] = now + TOKEN_TTL
-            return self._json(200, {"token": token, "ttl": TOKEN_TTL})
+                TOKENS[token] = {"exp": now + ttl, "role": role}
+            self.role = role
+            self.read_only_access = bool(cfg["read_only"]) or role == "view"
+            return self._json(200, {"token": token, "ttl": ttl, "role": role})
 
         # --- разбор путей: всё лежит ВНУТРИ корня --------------------------- #
         def _api_resolve(self, raw):
@@ -962,7 +1339,7 @@ def make_handler(cfg):
             # склейка сначала, нормализация потом: только так ../ может
             # показать выход за корень (при ROOT=/ это как раньше)
             server = os.path.abspath(os.path.join(ROOT, raw.lstrip("/")))
-            if not path_inside(ROOT, server) or undo_hidden(server):
+            if not path_inside(ROOT, server) or internal_hidden(server):
                 return None, 403, "path escapes the root"
             if not path_inside(ROOT_REAL, os.path.realpath(server)):
                 return None, 403, "path escapes the root (symlink)"
@@ -991,7 +1368,7 @@ def make_handler(cfg):
 
         # --- 1) статус ----------------------------------------------------- #
         def _api_status(self):
-            self._json(200, {
+            out = {
                 "root": cfg["root"],
                 "ftp": {
                     "enabled": bool(cfg["ftp_enabled"]),
@@ -999,7 +1376,14 @@ def make_handler(cfg):
                     "user": cfg["ftp_user"],
                 },
                 "ok": True,
-            })
+                "readOnly": bool(getattr(self, "read_only_access", False)),
+                "sessionTtl": int(cfg["session_ttl"]),
+                "version": SERVER_VERSION,
+            }
+            role = getattr(self, "role", None)
+            if role in ("admin", "view"):
+                out["role"] = role
+            self._json(200, out)
 
         # --- 2) список каталога -------------------------------------------- #
         def _api_list(self):
@@ -1023,7 +1407,7 @@ def make_handler(cfg):
             entries = []
             for name in names:
                 full = os.path.join(path, name)
-                if undo_hidden(full):
+                if internal_hidden(full):
                     continue
                 try:
                     st = os.stat(full)          # симлинк на папку -> папка
@@ -1065,6 +1449,8 @@ def make_handler(cfg):
 
         # --- 3/4) mkdir и newfile ------------------------------------------- #
         def _make_path(self, data, is_dir):
+            if not self._require_write():
+                return
             got = self._require_path(data.get("path"))
             if got is None:
                 return
@@ -1097,6 +1483,9 @@ def make_handler(cfg):
 
         # --- 4b) сохранение текста из редактора ---------------------------- #
         def _api_write(self):
+            if not self._require_write():
+                self._drop_body()
+                return
             data, err = self._read_json_body(MAX_EDIT)
             if err is not None:
                 if err[0] != 413:
@@ -1171,6 +1560,8 @@ def make_handler(cfg):
 
         # --- 5) rename ------------------------------------------------------ #
         def _api_rename(self, data):
+            if not self._require_write():
+                return
             from_res, code, msg = self._api_resolve(data.get("from"))
             if from_res is None:
                 return self._err(code, msg)
@@ -1201,11 +1592,54 @@ def make_handler(cfg):
             return self._json(200, {"ok": True})
 
         # --- 6) delete ------------------------------------------------------- #
+        def _trash_one(self, client, path):
+            """Переместить один путь в корзину; -> (meta, None) | (None, ошибка)."""
+            name = os.path.basename(path.rstrip(os.sep))
+            if not name or name in (".", ".."):
+                return None, "cannot trash the root"
+            isdir = os.path.isdir(path) and not os.path.islink(path)
+            try:
+                st = os.lstat(path)
+            except OSError as exc:
+                _code, msg = fs_error(exc)
+                return None, msg
+            meta = {
+                "id": secrets.token_hex(8),
+                "name": name,
+                "path": client,
+                "size": 0 if isdir else st.st_size,
+                "mtime": int(st.st_mtime),
+                "deletedAt": time.time(),
+                "dir": isdir,
+            }
+            entry_dir = os.path.join(TRASH_DIR, meta["id"])
+            with TRASH_LOCK:
+                items = load_trash_index()
+                items.append(meta)
+                try:
+                    os.makedirs(entry_dir, mode=0o700, exist_ok=True)
+                    save_trash_index(items)
+                    shutil.move(path, os.path.join(entry_dir, name))
+                except OSError as exc:
+                    rest = [i for i in items if i.get("id") != meta["id"]]
+                    try:
+                        save_trash_index(rest)
+                    except OSError:
+                        pass
+                    shutil.rmtree(entry_dir, ignore_errors=True)
+                    _code, msg = fs_error(exc)
+                    return None, msg
+            return meta, None
+
         def _api_delete(self, data):
+            if not self._require_write():
+                return
             items = data.get("items")
             if not isinstance(items, list):
                 return self._err(400, "items must be a list")
+            to_trash = bool(data.get("trash"))
             deleted = 0
+            trashed = 0
             errors = []
             snapshots = []
             for raw in items:
@@ -1216,6 +1650,13 @@ def make_handler(cfg):
                 client, path = res
                 if not os.path.exists(path) and not os.path.islink(path):
                     errors.append({"path": client, "error": "no such path"})
+                    continue
+                if to_trash:
+                    _meta, msg = self._trash_one(client, path)
+                    if msg:
+                        errors.append({"path": client, "error": msg})
+                    else:
+                        trashed += 1
                     continue
                 snap = None
                 try:
@@ -1242,7 +1683,7 @@ def make_handler(cfg):
                 undo_push("Delete %d item(s)" % len(snapshots),
                           restore=snapshots)
             return self._json(200, {"ok": True, "deleted": deleted,
-                                    "errors": errors})
+                                    "trashed": trashed, "errors": errors})
 
         # --- 7/8) move и copy ------------------------------------------------ #
         @staticmethod
@@ -1262,6 +1703,8 @@ def make_handler(cfg):
                     os.remove(src)
 
         def _api_transfer(self, data, move):
+            if not self._require_write():
+                return
             items = data.get("items")
             if not isinstance(items, list):
                 return self._err(400, "items must be a list")
@@ -1305,6 +1748,11 @@ def make_handler(cfg):
                         continue
                 target = os.path.join(dest, name)
                 target_client = os.path.join(dest_client, name)
+                target_res, _code, target_msg = self._api_resolve(target_client)
+                if target_res is None or internal_hidden(target):
+                    errors.append({"path": client,
+                                   "error": target_msg or "path escapes the root"})
+                    continue
                 if os.path.exists(target) or os.path.islink(target):
                     errors.append({"path": client, "error": "already exists"})
                     continue
@@ -1351,14 +1799,32 @@ def make_handler(cfg):
             return self._json(200, {"ok": True, "copied": done,
                                     "errors": errors})
 
-        # --- 8b) Ctrl+Z ------------------------------------------------------ #
-        def _api_undo(self):
-            with UNDO_LOCK:
-                entry = UNDO_STACK.pop() if UNDO_STACK else None
-            if entry is None:
-                return self._err(409, "nothing to undo")
-
+        # --- 8b) Ctrl+Z / Ctrl+Y -------------------------------------------- #
+        def _apply_entry(self, entry, redo=False):
+            """Отмена (удалить цели/вернуть старое) или повтор операции."""
             errors = []
+            if redo:
+                for raw in entry.get("redo_remove", []):
+                    got = undo_server_path(raw, ROOT)
+                    if got is None:
+                        errors.append({"path": raw, "error": "invalid path"})
+                        continue
+                    client, server = got
+                    if os.path.lexists(server):
+                        try:
+                            undo_remove(server)
+                        except OSError as exc:
+                            _code, msg = fs_error(exc)
+                            errors.append({"path": client, "error": msg})
+                for s in entry.get("after", []):
+                    try:
+                        msg = undo_restore(s, ROOT)
+                        if msg:
+                            errors.append({"path": s["client"], "error": msg})
+                    except OSError as exc:
+                        _code, msg = fs_error(exc)
+                        errors.append({"path": s["client"], "error": msg})
+                return errors
             for raw in entry.get("remove", []):
                 got = undo_server_path(raw, ROOT)
                 if got is None:
@@ -1381,14 +1847,58 @@ def make_handler(cfg):
                 except OSError as exc:
                     _code, msg = fs_error(exc)
                     errors.append({"path": s["client"], "error": msg})
+            return errors
 
+        @staticmethod
+        def _history_item(entry):
+            return {
+                "id": entry.get("id", ""),
+                "label": entry.get("label", ""),
+                "time": entry.get("time", 0),
+            }
+
+        def _api_undo_history(self):
+            with UNDO_LOCK:
+                items = [self._history_item(e) for e in reversed(UNDO_STACK)]
+                redo = [self._history_item(e) for e in reversed(REDO_STACK)]
+            return self._json(200, {"items": items, "redo": redo})
+
+        def _api_undo(self):
+            if not self._require_write():
+                return
+            with UNDO_LOCK:
+                entry = UNDO_STACK.pop() if UNDO_STACK else None
+            if entry is None:
+                return self._err(409, "nothing to undo")
+
+            errors = self._apply_entry(entry)
             if errors:
                 with UNDO_LOCK:
                     UNDO_STACK.append(entry)
                 return self._json(200, {"ok": False, "label": entry["label"],
                                         "errors": errors})
 
-            undo_cleanup(entry)
+            # снимки НЕ удаляем: они нужны для повтора (redo)
+            redo_push(entry)
+            return self._json(200, {"ok": True, "label": entry["label"],
+                                    "errors": []})
+
+        def _api_redo(self):
+            if not self._require_write():
+                return
+            with UNDO_LOCK:
+                entry = REDO_STACK.pop() if REDO_STACK else None
+            if entry is None:
+                return self._err(409, "nothing to redo")
+
+            errors = self._apply_entry(entry, redo=True)
+            if errors:
+                with UNDO_LOCK:
+                    REDO_STACK.append(entry)
+                return self._json(200, {"ok": False, "label": entry["label"],
+                                        "errors": errors})
+
+            undo_push_existing(entry)
             return self._json(200, {"ok": True, "label": entry["label"],
                                     "errors": []})
 
@@ -1419,6 +1929,8 @@ def make_handler(cfg):
             return self._json(200, {"places": places})
 
         def _api_places_post(self, data):
+            if not self._require_write():
+                return
             places, bad = validate_places(data.get("places"))
             if places is None:
                 return self._err(400, bad)
@@ -1431,6 +1943,8 @@ def make_handler(cfg):
             return self._json(200, {"ok": True, "places": places})
 
         def _api_places_delete(self):
+            if not self._require_write():
+                return
             with PLACES_LOCK:
                 try:
                     if os.path.exists(PLACES_PATH):
@@ -1444,6 +1958,9 @@ def make_handler(cfg):
 
         # --- 10) upload ------------------------------------------------------ #
         def _api_upload(self):
+            if not self._require_write():
+                self._drop_body()
+                return
             # резолвим путь вручную (не через _require_path), чтобы первым
             # делом отбросить тело запроса, и только потом слать ошибку
             dest_raw = self._q("path")
@@ -1761,6 +2278,1138 @@ def make_handler(cfg):
                     pass
                 return
 
+        # --- 13) журнал действий --------------------------------------------- #
+        def _api_audit(self):
+            try:
+                limit = int(self._q("limit") or 200)
+            except (TypeError, ValueError):
+                return self._err(400, "bad limit")
+            limit = max(0, min(limit, 2000))
+            with AUDIT_LOCK:
+                items = list(AUDIT)
+            items.reverse()                     # сначала самые свежие
+            return self._json(200, {"items": items[:limit]})
+
+        # --- 14) поиск -------------------------------------------------------- #
+        def _api_search(self):
+            got = self._require_path(self._q("path"))
+            if got is None:
+                return
+            client, start_path = got
+            if not os.path.exists(start_path):
+                return self._err(404, "no such path: %s" % client)
+            if not os.path.isdir(start_path):
+                return self._err(400, "not a directory")
+            q = self._q("q")
+            if not isinstance(q, str) or not q:
+                return self._err(400, "q is required")
+            mode = self._q("mode") or "name"
+            if mode not in ("name", "content"):
+                return self._err(400, "mode must be name or content")
+            truthy = ("1", "true", "yes", "on")
+            use_regex = str(self._q("regex") or "").lower() in truthy
+            include_hidden = str(self._q("hidden") or "").lower() in truthy
+            try:
+                limit = int(self._q("limit") or SEARCH_LIMIT_DEFAULT)
+            except (TypeError, ValueError):
+                return self._err(400, "bad limit")
+            limit = max(0, min(limit, SEARCH_LIMIT_MAX))
+            try:
+                rx = re.compile(q, re.IGNORECASE) if use_regex else None
+            except re.error:
+                return self._err(400, "invalid regex")
+            needle = q.lower()
+            deadline = time.time() + MAX_SEARCH_TIME
+            results = []
+            truncated = False
+
+            def _match(text):
+                return rx.search(text) is not None if rx \
+                    else needle in text.lower()
+
+            def _client_resolve(full):
+                if internal_hidden(full):
+                    return None
+                c = client_for_server(ROOT, ROOT_REAL, full)
+                if c is None:
+                    return None
+                res, _code, _msg = self._api_resolve(c)
+                return res
+
+            for dirpath, dirnames, filenames in os.walk(
+                    start_path, topdown=True, followlinks=False):
+                if time.time() > deadline or len(results) >= limit:
+                    truncated = True
+                    break
+                depth = dirpath[len(start_path):].count(os.sep)
+                if depth > MAX_SEARCH_DEPTH:
+                    dirnames[:] = []
+                    truncated = True
+                    continue
+                if _client_resolve(dirpath) is None:
+                    dirnames[:] = []                # не спускаемся в скрытое
+                    filenames[:] = []
+                    continue
+                keep_dirs = []
+                for name in dirnames:
+                    full = os.path.join(dirpath, name)
+                    if not include_hidden and name.startswith("."):
+                        continue
+                    if _client_resolve(full) is not None:
+                        keep_dirs.append(name)
+                dirnames[:] = keep_dirs
+
+                for name in filenames:
+                    if time.time() > deadline or len(results) >= limit:
+                        truncated = True
+                        break
+                    if not include_hidden and name.startswith("."):
+                        continue
+                    full = os.path.join(dirpath, name)
+                    res = _client_resolve(full)
+                    if res is None:
+                        continue
+                    full_client, _full_server = res
+                    try:
+                        st = os.stat(full)
+                    except OSError:
+                        try:
+                            st = os.lstat(full)
+                        except OSError:
+                            continue
+                    is_dir = stat.S_ISDIR(st.st_mode)
+                    base = {
+                        "path": full_client,
+                        "name": os.path.basename(full_client),
+                        "dir": is_dir,
+                        "size": 0 if is_dir else st.st_size,
+                        "mtime": int(st.st_mtime),
+                        "mode": mode_string(st.st_mode),
+                        "line": 0,
+                        "text": "",
+                    }
+                    if mode == "name":
+                        if _match(base["name"]):
+                            results.append(base)
+                        continue
+                    if not os.path.isfile(full) or st.st_size > MAX_CONTENT_FILE:
+                        continue
+                    try:
+                        with open(full, "rb") as fh:
+                            data = fh.read(MAX_CONTENT_FILE + 1)
+                    except OSError:
+                        continue
+                    if len(data) > MAX_CONTENT_FILE:
+                        continue
+                    for lineno, line in enumerate(
+                            data.decode("utf-8", "replace").splitlines(), 1):
+                        if _match(line):
+                            hit = dict(base)
+                            hit["line"] = lineno
+                            hit["text"] = line.strip()[:200]
+                            results.append(hit)
+                        if len(results) >= limit or time.time() > deadline:
+                            break
+                    if time.time() > deadline:
+                        truncated = True
+            return self._json(200, {"path": client, "q": q, "mode": mode,
+                                    "results": results,
+                                    "truncated": truncated})
+
+        # --- 15) массовые операции ------------------------------------------- #
+        def _api_batchrename(self, data):
+            if not self._require_write():
+                return
+            items = data.get("items")
+            if not isinstance(items, list):
+                return self._err(400, "items must be a list")
+            renamed = 0
+            errors = []
+            destinations = []
+            snapshots = []
+            used = set()
+            for item in items:
+                if not isinstance(item, dict):
+                    errors.append({"path": "", "error": "item must be an object"})
+                    continue
+                from_res, code, msg = self._api_resolve(item.get("from"))
+                if from_res is None:
+                    errors.append({"path": str(item.get("from")),
+                                   "error": msg})
+                    continue
+                to_res, code, msg = self._api_resolve(item.get("to"))
+                if to_res is None:
+                    errors.append({"path": str(item.get("to")), "error": msg})
+                    continue
+                client_src, src = from_res
+                client_dst, dst = to_res
+                if not os.path.exists(src) and not os.path.islink(src):
+                    errors.append({"path": client_src, "error": "no such path"})
+                    continue
+                if os.path.lexists(dst) or client_dst in used:
+                    errors.append({"path": client_dst, "error": "already exists"})
+                    continue
+                snap = None
+                try:
+                    snap = snapshot_path(client_src, src)
+                except OSError:
+                    errors.append({"path": client_src,
+                                   "error": "cannot snapshot for undo"})
+                    continue
+                try:
+                    os.rename(src, dst)
+                except OSError as exc:
+                    _code, msg = fs_error(exc)
+                    undo_cleanup({"restore": [snap]})
+                    errors.append({"path": client_src, "error": msg})
+                    continue
+                renamed += 1
+                used.add(client_dst)
+                destinations.append(client_dst)
+                snapshots.append(snap)
+            if destinations:
+                undo_push("Rename %d item(s)" % renamed,
+                          remove=destinations, restore=snapshots)
+            return self._json(200, {"ok": not errors, "renamed": renamed,
+                                    "errors": errors})
+
+        @staticmethod
+        def _timestamp(value, default):
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return None
+            try:
+                stamp = float(value)
+            except (TypeError, ValueError):
+                return None
+            if stamp < 0 or stamp > 253402300799:
+                return None
+            return stamp
+
+        def _api_touch(self, data):
+            if not self._require_write():
+                return
+            items = data.get("items")
+            if not isinstance(items, list):
+                return self._err(400, "items must be a list")
+            now = time.time()
+            mtime = self._timestamp(data.get("mtime"), now)
+            atime = self._timestamp(data.get("atime"), now)
+            if mtime is None or atime is None:
+                return self._err(400, "bad mtime/atime")
+            touched = 0
+            errors = []
+            for raw in items:
+                res, code, msg = self._api_resolve(raw)
+                if res is None:
+                    errors.append({"path": raw, "error": msg})
+                    continue
+                client, full = res
+                if os.path.islink(full) or not (os.path.isfile(full)
+                                                or os.path.isdir(full)):
+                    errors.append({"path": client,
+                                   "error": "only regular files and directories"})
+                    continue
+                try:
+                    os.utime(full, (atime, mtime))
+                    touched += 1
+                except OSError as exc:
+                    _code, msg = fs_error(exc)
+                    errors.append({"path": client, "error": msg})
+            return self._json(200, {"ok": not errors, "touched": touched,
+                                    "errors": errors})
+
+        @staticmethod
+        def _parse_mode(raw):
+            if isinstance(raw, bool) or raw is None:
+                return None
+            if isinstance(raw, int):
+                mode = raw
+            elif isinstance(raw, str):
+                try:
+                    mode = int(raw.strip(), 8)
+                except ValueError:
+                    return None
+            else:
+                return None
+            if mode < 0 or mode > 0o7777:
+                return None
+            return mode
+
+        def _api_chmod(self, data):
+            if not self._require_write():
+                return
+            mode = self._parse_mode(data.get("mode"))
+            if mode is None:
+                return self._err(400, "bad mode (0..07777)")
+            items = data.get("items")
+            if not isinstance(items, list):
+                return self._err(400, "items must be a list")
+            recursive = bool(data.get("recursive"))
+            changed = 0
+            errors = []
+
+            def _targets(client, full):
+                out = [(client, full)]
+                if not recursive or os.path.islink(full) \
+                        or not os.path.isdir(full):
+                    return out
+                for dirpath, dirnames, filenames in os.walk(
+                        full, topdown=True, followlinks=False):
+                    c = client_for_server(ROOT, ROOT_REAL, dirpath)
+                    if c is None or internal_hidden(dirpath) \
+                            or self._api_resolve(c)[0] is None:
+                        dirnames[:] = []
+                        filenames[:] = []
+                        continue
+                    for name in dirnames + filenames:
+                        sub = os.path.join(dirpath, name)
+                        sub_client = os.path.join(c, name)
+                        if internal_hidden(sub) \
+                                or self._api_resolve(sub_client)[0] is None:
+                            continue
+                        out.append((sub_client, sub))
+                return out
+
+            for raw in items:
+                res, code, msg = self._api_resolve(raw)
+                if res is None:
+                    errors.append({"path": raw, "error": msg})
+                    continue
+                for target_client, target in _targets(*res):
+                    if os.path.islink(target):
+                        errors.append({"path": target_client,
+                                       "error": "symlink is not supported"})
+                        continue
+                    if not os.path.exists(target):
+                        errors.append({"path": target_client,
+                                       "error": "no such path"})
+                        continue
+                    try:
+                        os.chmod(target, mode)
+                        changed += 1
+                    except OSError as exc:
+                        _code, msg = fs_error(exc)
+                        errors.append({"path": target_client, "error": msg})
+            return self._json(200, {"ok": not errors, "changed": changed,
+                                    "errors": errors})
+
+        # --- 16) архивы ------------------------------------------------------- #
+        @staticmethod
+        def _archive_format(name):
+            low = str(name or "").lower()
+            if low.endswith(".zip"):
+                return "zip"
+            if low.endswith(".tar.gz") or low.endswith(".tgz"):
+                return "tar.gz"
+            if low.endswith(".tar.bz2") or low.endswith(".tbz2"):
+                return "tar.bz2"
+            if low.endswith(".tar.xz") or low.endswith(".txz"):
+                return "tar.xz"
+            if low.endswith(".tar"):
+                return "tar"
+            return None
+
+        @staticmethod
+        def _tar_mode(fmt, write=False):
+            modes = {
+                "tar": ("r:", "w"),
+                "tar.gz": ("r:gz", "w:gz"),
+                "tar.bz2": ("r:bz2", "w:bz2"),
+                "tar.xz": ("r:xz", "w:xz"),
+            }
+            return modes[fmt][1 if write else 0]
+
+        @staticmethod
+        def _archive_rel(name):
+            """Имя участника архива -> безопасный относительный путь."""
+            if not isinstance(name, str) or not name or "\x00" in name:
+                return None
+            name = name.replace("\\", "/")
+            if name.startswith("/") or re.match(r"^[A-Za-z]:", name):
+                return None
+            parts = []
+            for comp in name.split("/"):
+                if comp in ("", "."):
+                    continue
+                if comp == "..":
+                    return None
+                parts.append(comp)
+            if not parts:
+                return None
+            rel = os.path.join(*parts)
+            if os.path.isabs(rel) or rel.startswith(".." + os.sep):
+                return None
+            return rel
+
+        @staticmethod
+        def _zip_is_link(info):
+            mode = (info.external_attr >> 16) & 0xFFFF
+            if not stat.S_IFMT(mode):
+                return False
+            return not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))
+
+        def _api_archive_list(self):
+            got = self._require_path(self._q("path"))
+            if got is None:
+                return
+            client, full = got
+            if not os.path.exists(full):
+                return self._err(404, "no such path: %s" % client)
+            if not os.path.isfile(full):
+                return self._err(400, "not a file")
+            fmt = self._archive_format(os.path.basename(full))
+            if fmt is None:
+                return self._err(400, "unsupported archive format")
+            entries = []
+            try:
+                if fmt == "zip":
+                    with zipfile.ZipFile(full) as zf:
+                        for info in zf.infolist():
+                            entries.append({
+                                "name": info.filename,
+                                "size": info.file_size,
+                                "dir": info.is_dir(),
+                            })
+                else:
+                    with tarfile.open(full, self._tar_mode(fmt)) as tf:
+                        for member in tf.getmembers():
+                            if not (member.isfile() or member.isdir()):
+                                continue
+                            entries.append({
+                                "name": member.name,
+                                "size": 0 if member.isdir() else member.size,
+                                "dir": member.isdir(),
+                            })
+            except (OSError, ValueError, zipfile.BadZipFile,
+                    tarfile.TarError):
+                return self._err(400, "invalid archive")
+            return self._json(200, {"path": client, "format": fmt,
+                                    "entries": entries})
+
+        def _api_archive_extract(self, data):
+            if not self._require_write():
+                return
+            archive_res = self._require_path(data.get("archive"))
+            if archive_res is None:
+                return
+            dest_res = self._require_path(data.get("dest"))
+            if dest_res is None:
+                return
+            archive_client, archive = archive_res
+            dest_client, dest = dest_res
+            if not os.path.isfile(archive):
+                return self._err(400, "archive must be a file")
+            if not os.path.isdir(dest):
+                return self._err(400, "dest must be a directory")
+            fmt = self._archive_format(os.path.basename(archive))
+            if fmt is None:
+                return self._err(400, "unsupported archive format")
+            overwrite = bool(data.get("overwrite"))
+            plan = []
+            errors = []
+            total = 0
+            try:
+                if fmt == "zip":
+                    source = zipfile.ZipFile(archive)
+                    raw_members = source.infolist()
+                else:
+                    source = tarfile.open(archive, self._tar_mode(fmt))
+                    raw_members = source.getmembers()
+            except (OSError, ValueError, zipfile.BadZipFile,
+                    tarfile.TarError):
+                raise _HTTPError(400, "invalid archive")
+
+            try:
+                for member in raw_members:
+                    name = member.filename if fmt == "zip" else member.name
+                    rel = self._archive_rel(name)
+                    if rel is None:
+                        errors.append({"name": name,
+                                       "error": "unsafe member path"})
+                        continue
+                    full = os.path.join(dest, rel)
+                    client = os.path.join(dest_client, rel)
+                    res, _code, msg = self._api_resolve(client)
+                    if res is None or internal_hidden(full) or \
+                            not path_inside(ROOT_REAL, os.path.realpath(full)):
+                        errors.append({"name": name,
+                                       "error": msg or "path escapes the root"})
+                        continue
+                    if fmt == "zip":
+                        isdir = member.is_dir() or name.endswith("/")
+                        bad = self._zip_is_link(member)
+                        size = 0 if isdir else member.file_size
+                    else:
+                        isdir = member.isdir()
+                        bad = not (member.isfile() or member.isdir())
+                        size = 0 if isdir else member.size
+                    if bad:
+                        errors.append({"name": name,
+                                       "error": "links/devices not allowed"})
+                        continue
+                    if not isdir:
+                        total += size
+                        if total > MAX_ARCHIVE_TOTAL:
+                            raise _HTTPError(413, "archive is too large")
+                    plan.append((rel, name, size, isdir, member))
+            except Exception:
+                source.close()
+                raise
+
+            # Архив остаётся открытым: из него читаются отобранные участники.
+            extracted = 0
+            snapshots = []
+            top_new = {}
+            for rel, name, size, isdir, member in plan:
+                full = os.path.join(dest, rel)
+                client = os.path.join(dest_client, rel)
+                top = rel.split(os.sep)[0]
+                if top not in top_new:
+                    top_new[top] = not os.path.lexists(
+                        os.path.join(dest, top))
+                if os.path.lexists(full) and not overwrite:
+                    errors.append({"name": name, "error": "already exists"})
+                    continue
+                try:
+                    if isdir:
+                        os.makedirs(full, mode=0o755, exist_ok=True)
+                        extracted += 1
+                        continue
+                    parent = os.path.dirname(full)
+                    if parent and not os.path.isdir(parent):
+                        os.makedirs(parent, mode=0o755, exist_ok=True)
+                    if os.path.lexists(full):
+                        snap = None
+                        try:
+                            snap = snapshot_path(client, full)
+                        except OSError:
+                            errors.append({"name": name,
+                                           "error": "cannot snapshot for undo"})
+                            continue
+                        snapshots.append(snap)
+                        undo_remove(full)   # не пишем сквозь симлинк
+                    if fmt == "zip":
+                        stream = source.open(member)
+                    else:
+                        stream = source.extractfile(member)
+                    if stream is None:
+                        errors.append({"name": name, "error": "cannot read member"})
+                        continue
+                    try:
+                        with open(full, "wb") as out:
+                            left = size
+                            while left > 0:
+                                chunk = stream.read(min(CHUNK, left))
+                                if not chunk:
+                                    break
+                                out.write(chunk)
+                                left -= len(chunk)
+                    finally:
+                        stream.close()
+                    extracted += 1
+                except (OSError, ValueError, zipfile.BadZipFile,
+                        tarfile.TarError) as exc:
+                    if isinstance(exc, OSError):
+                        _code, msg = fs_error(exc)
+                    else:
+                        msg = str(exc) or "cannot extract member"
+                    errors.append({"name": name, "error": msg})
+            source.close()
+
+            remove_tops = [os.path.join(dest_client, top)
+                           for top, new in top_new.items() if new]
+            if remove_tops or snapshots:
+                undo_push("Extract %s" % os.path.basename(archive),
+                          remove=remove_tops, restore=snapshots)
+            return self._json(200, {"ok": not errors, "extracted": extracted,
+                                    "errors": errors})
+
+        def _archive_files(self, items, errors):
+            """Собрать (серверный путь, имя в архиве) со всеми проверками."""
+            files = []
+            total = 0
+            for raw in items:
+                res, code, msg = self._api_resolve(raw)
+                if res is None:
+                    errors.append({"path": raw, "error": msg})
+                    continue
+                client, full = res
+                if internal_hidden(full):
+                    errors.append({"path": client,
+                                   "error": "path escapes the root"})
+                    continue
+                base = os.path.basename(full.rstrip(os.sep)) or "root"
+                if os.path.islink(full):
+                    errors.append({"path": client,
+                                   "error": "symlink is not allowed"})
+                    continue
+                if os.path.isfile(full):
+                    candidates = [(full, base)]
+                elif os.path.isdir(full):
+                    candidates = []
+                    for dirpath, dirnames, filenames in os.walk(
+                            full, topdown=True, followlinks=False):
+                        if internal_hidden(dirpath):
+                            dirnames[:] = []
+                            filenames[:] = []
+                            continue
+                        c = client_for_server(ROOT, ROOT_REAL, dirpath)
+                        if c is None or self._api_resolve(c)[0] is None:
+                            dirnames[:] = []
+                            filenames[:] = []
+                            continue
+                        rel_dir = os.path.relpath(dirpath, full)
+                        prefix = base if rel_dir == "." \
+                            else os.path.join(base, rel_dir)
+                        keep = []
+                        for name in dirnames:
+                            sub = os.path.join(dirpath, name)
+                            if internal_hidden(sub) or os.path.islink(sub) \
+                                    or self._api_resolve(os.path.join(c, name))[0] is None:
+                                continue
+                            keep.append(name)
+                            candidates.append((sub, os.path.join(prefix, name)))
+                        dirnames[:] = keep
+                        for name in filenames:
+                            sub = os.path.join(dirpath, name)
+                            if internal_hidden(sub) or os.path.islink(sub) \
+                                    or self._api_resolve(os.path.join(c, name))[0] is None:
+                                continue
+                            candidates.append((sub, os.path.join(prefix, name)))
+                else:
+                    errors.append({"path": client, "error": "unsupported type"})
+                    continue
+                for source, arcname in candidates:
+                    try:
+                        st = os.stat(source)
+                    except OSError as exc:
+                        _code, msg = fs_error(exc)
+                        errors.append({"path": source, "error": msg})
+                        continue
+                    if not stat.S_ISREG(st.st_mode):
+                        continue
+                    total += st.st_size
+                    if total > MAX_ARCHIVE_TOTAL:
+                        raise _HTTPError(413, "archive is too large")
+                    files.append((source, arcname))
+            return files
+
+        def _api_archive_create(self, data):
+            if not self._require_write():
+                return
+            dest_res = self._require_path(data.get("dest"))
+            if dest_res is None:
+                return
+            dest_client, dest = dest_res
+            if not os.path.isdir(dest):
+                return self._err(400, "dest must be a directory")
+            name = sanitize_filename(data.get("name"))
+            if not name:
+                return self._err(400, "name is required")
+            fmt = data.get("format") or "zip"
+            if fmt not in ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz"):
+                return self._err(400, "unsupported archive format")
+            items = data.get("items")
+            if not isinstance(items, list):
+                return self._err(400, "items must be a list")
+            final_client = os.path.join(dest_client, name)
+            res, code, msg = self._api_resolve(final_client)
+            if res is None or internal_hidden(os.path.join(dest, name)):
+                return self._err(code or 403, msg or "path escapes the root")
+            final = os.path.join(dest, name)
+            errors = []
+            files = self._archive_files(items, errors)
+            snap = None
+            if os.path.lexists(final):
+                try:
+                    snap = snapshot_path(final_client, final)
+                except OSError:
+                    errors.append({"path": final_client,
+                                   "error": "cannot snapshot for undo"})
+
+            fd, tmp = tempfile.mkstemp(prefix=".nerevar-fm-archive-",
+                                       suffix=".part", dir=dest)
+            os.close(fd)
+            try:
+                if fmt == "zip":
+                    out = zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED)
+                else:
+                    out = tarfile.open(tmp, self._tar_mode(fmt, write=True))
+                try:
+                    for source, arcname in files:
+                        if os.path.abspath(source) == os.path.abspath(tmp):
+                            continue
+                        if fmt == "zip":
+                            # ZipFile.write() падает на файлах до 1980 года —
+                            # задаём дату сами и потоково копируем содержимое.
+                            st = os.stat(source)
+                            tm = time.localtime(st.st_mtime)
+                            year = max(1980, min(tm.tm_year, 2107))
+                            info = zipfile.ZipInfo(
+                                arcname,
+                                (year, tm.tm_mon, tm.tm_mday,
+                                 tm.tm_hour, tm.tm_min, tm.tm_sec))
+                            info.compress_type = zipfile.ZIP_DEFLATED
+                            info.external_attr = \
+                                (stat.S_IMODE(st.st_mode) & 0xFFFF) << 16
+                            with out.open(info, "w") as zout:
+                                with open(source, "rb") as fin:
+                                    shutil.copyfileobj(fin, zout, CHUNK)
+                        else:
+                            out.add(source, arcname=arcname, recursive=False)
+                finally:
+                    out.close()
+                os.replace(tmp, final)
+                tmp = None
+            except (OSError, ValueError, zipfile.BadZipFile,
+                    tarfile.TarError) as exc:
+                _code, msg = fs_error(exc) if isinstance(exc, OSError) \
+                    else (400, str(exc) or "cannot create archive")
+                if snap is not None:
+                    undo_cleanup({"restore": [snap]})
+                return self._err(_code, msg)
+            finally:
+                if tmp is not None:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+            try:
+                size = os.path.getsize(final)
+            except OSError:
+                size = 0
+            undo_push("Create archive %s" % name, remove=[final_client],
+                      restore=[snap] if snap is not None else [])
+            return self._json(200, {"ok": not errors, "path": final_client,
+                                    "size": size})
+
+        # --- 17) хэш и свойства ---------------------------------------------- #
+        def _api_hash(self):
+            algo = str(self._q("algo") or "sha256").lower()
+            if algo not in ("sha256", "md5", "sha1"):
+                return self._err(400, "algo must be sha256, md5 or sha1")
+            got = self._require_path(self._q("path"))
+            if got is None:
+                return
+            client, full = got
+            if not os.path.isfile(full):
+                return self._err(400, "not a regular file")
+            digest = hashlib.new(algo)
+            size = 0
+            try:
+                with open(full, "rb") as fh:
+                    while True:
+                        chunk = fh.read(CHUNK)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                        size += len(chunk)
+            except OSError as exc:
+                code, msg = fs_error(exc)
+                return self._err(code, msg)
+            return self._json(200, {"path": client, "algo": algo,
+                                    "hash": digest.hexdigest(), "size": size})
+
+        def _api_properties(self):
+            got = self._require_path(self._q("path"))
+            if got is None:
+                return
+            client, full = got
+            try:
+                st = os.lstat(full)
+            except OSError as exc:
+                code, msg = fs_error(exc)
+                return self._err(code, msg)
+            try:
+                followed = os.stat(full)
+            except OSError:
+                followed = st
+            islink = stat.S_ISLNK(st.st_mode)
+            isdir = stat.S_ISDIR(followed.st_mode)
+            if islink:
+                kind = "symlink"
+            elif isdir:
+                kind = "dir"
+            elif stat.S_ISREG(followed.st_mode):
+                kind = "file"
+            else:
+                kind = "other"
+            guessed, _enc = mimetypes.guess_type(full)
+            if isdir or not guessed:
+                mime = None
+            else:
+                mime = guessed
+            try:
+                target = os.readlink(full) if islink else ""
+            except OSError:
+                target = ""
+            return self._json(200, {
+                "path": client,
+                "name": os.path.basename(client) or "/",
+                "dir": os.path.dirname(client) or "/",
+                "size": 0 if isdir else followed.st_size,
+                "mtime": int(followed.st_mtime),
+                "ctime": int(followed.st_ctime),
+                "mode": stat.S_IMODE(st.st_mode),
+                "modeText": mode_string(st.st_mode),
+                "type": kind,
+                "mime": mime,
+                "hidden": os.path.basename(client).startswith("."),
+                "links": st.st_nlink,
+                "target": target,
+            })
+
+        # --- 18) корзина ------------------------------------------------------ #
+        def _api_trash_list(self):
+            with TRASH_LOCK:
+                items = load_trash_index()
+            return self._json(200, {"items": items})
+
+        def _api_trash_restore(self, data):
+            if not self._require_write():
+                return
+            ids = data.get("items")
+            if not isinstance(ids, list):
+                return self._err(400, "items must be a list")
+            restored = 0
+            errors = []
+            collision = False
+            with TRASH_LOCK:
+                working = load_trash_index()
+                for tid in ids:
+                    idx = -1
+                    for i, meta in enumerate(working):
+                        if meta.get("id") == tid:
+                            idx = i
+                            break
+                    if idx < 0:
+                        errors.append({"path": str(tid),
+                                       "error": "no such id"})
+                        continue
+                    meta = working[idx]
+                    src = trash_entry_path(meta)
+                    if src is None or not os.path.lexists(src):
+                        errors.append({"path": str(tid),
+                                       "error": "trash item is missing"})
+                        continue
+                    got = undo_server_path(meta.get("path"), ROOT)
+                    if got is None:
+                        errors.append({"path": str(tid),
+                                       "error": "invalid path"})
+                        continue
+                    client, dst = got
+                    if os.path.lexists(dst):
+                        errors.append({"path": client, "error": "already exists"})
+                        collision = True
+                        continue
+                    parent = os.path.dirname(dst)
+                    try:
+                        if parent and not os.path.isdir(parent):
+                            os.makedirs(parent, exist_ok=True)
+                        shutil.move(src, dst)
+                        restored += 1
+                        working.pop(idx)
+                        shutil.rmtree(os.path.dirname(src), ignore_errors=True)
+                    except OSError as exc:
+                        _code, msg = fs_error(exc)
+                        errors.append({"path": client, "error": msg})
+                if restored:
+                    try:
+                        save_trash_index(working)
+                    except OSError as exc:
+                        _code, msg = fs_error(exc)
+                        errors.append({"path": "/api/trash/restore",
+                                       "error": "cannot save trash index: "
+                                                + msg})
+            code = 409 if collision else 200
+            return self._json(code, {"ok": not errors, "restored": restored,
+                                     "errors": errors})
+
+        def _api_trash_purge(self, data):
+            if not self._require_write():
+                return
+            ids = data.get("items")
+            if not isinstance(ids, list):
+                return self._err(400, "items must be a list")
+            purged = 0
+            errors = []
+            with TRASH_LOCK:
+                working = load_trash_index()
+                for tid in ids:
+                    idx = -1
+                    for i, meta in enumerate(working):
+                        if meta.get("id") == tid:
+                            idx = i
+                            break
+                    if idx < 0:
+                        errors.append({"path": str(tid),
+                                       "error": "no such id"})
+                        continue
+                    meta = working[idx]
+                    src_dir = os.path.dirname(trash_entry_path(meta) or "")
+                    if not src_dir or not path_inside(TRASH_DIR, src_dir):
+                        errors.append({"path": str(tid),
+                                       "error": "invalid trash entry"})
+                        continue
+                    shutil.rmtree(src_dir, ignore_errors=True)
+                    working.pop(idx)
+                    purged += 1
+                if purged:
+                    try:
+                        save_trash_index(working)
+                    except OSError as exc:
+                        _code, msg = fs_error(exc)
+                        errors.append({"path": "/api/trash/purge",
+                                       "error": "cannot save trash index: "
+                                                + msg})
+            return self._json(200, {"ok": not errors, "purged": purged,
+                                    "errors": errors})
+
+        # --- 19) докачиваемая загрузка --------------------------------------- #
+        @staticmethod
+        def _upload_paths(upload_id):
+            if not id_valid(upload_id):
+                return None
+            return (os.path.join(UPLOAD_DIR, upload_id + ".part"),
+                    os.path.join(UPLOAD_DIR, upload_id + ".json"))
+
+        def _load_upload(self, upload_id):
+            paths = self._upload_paths(upload_id)
+            if paths is None:
+                return None
+            part, manifest_path = paths
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as fh:
+                    manifest = json.load(fh)
+            except (OSError, ValueError):
+                return None
+            if not isinstance(manifest, dict) or not manifest.get("name") \
+                    or not manifest.get("client"):
+                return None
+            return manifest, part, manifest_path
+
+        def _api_upload_status(self):
+            uid = self._q("uploadId")
+            loaded = self._load_upload(uid)
+            if loaded is None:
+                return self._err(404, "no such upload")
+            manifest, _part, _manifest_path = loaded
+            try:
+                offset = int(manifest.get("offset", 0))
+                total = int(manifest.get("total", 0))
+            except (TypeError, ValueError):
+                return self._err(404, "no such upload")
+            return self._json(200, {
+                "uploadId": uid,
+                "offset": offset,
+                "total": total,
+                "name": manifest.get("name", ""),
+                "path": manifest.get("path", ""),
+            })
+
+        def _api_upload_chunk(self):
+            if not self._require_write():
+                self._drop_body()
+                return
+            length = self._content_length()
+            if length is None:
+                self.close_connection = True
+                return self._err(411, "Content-Length required")
+            uid = self._q("uploadId")
+            if uid is not None and not id_valid(uid):
+                self._drop_body()
+                return self._err(400, "bad uploadId")
+            try:
+                offset = int(self._q("offset"))
+                total = int(self._q("total"))
+            except (TypeError, ValueError):
+                self._drop_body()
+                return self._err(400, "offset and total are required")
+            if total <= 0 or offset < 0 or length < 0 \
+                    or offset > total or length > total - offset:
+                self._drop_body()
+                return self._err(400, "bad total/offset")
+            rel = safe_rel_path(self._q("name"))
+            if rel is None:
+                self._drop_body()
+                return self._err(400, "bad name")
+            dest_res, code, msg = self._api_resolve(self._q("path"))
+            if dest_res is None:
+                self._drop_body()
+                return self._err(code, msg)
+            dest_client, dest = dest_res
+            if not os.path.exists(dest):
+                self._drop_body()
+                return self._err(404, "no such path: %s" % dest_client)
+            if not os.path.isdir(dest) or not os.access(dest, os.W_OK | os.X_OK):
+                self._drop_body()
+                return self._err(403, "not a writable directory")
+            final_client = os.path.join(dest_client, rel)
+            final_res, code, msg = self._api_resolve(final_client)
+            if final_res is None or internal_hidden(os.path.join(dest, rel)):
+                self._drop_body()
+                return self._err(code or 403, msg or "path escapes the root")
+            final = os.path.join(dest, rel)
+            if os.path.isdir(final) and not os.path.islink(final):
+                self._drop_body()
+                return self._err(400, "not a file")
+            parent = os.path.dirname(final)
+            parent_client = os.path.dirname(final_client) or "/"
+            if parent and not os.path.isdir(parent):
+                parent_res, code, msg = self._api_resolve(parent_client)
+                if parent_res is None:
+                    self._drop_body()
+                    return self._err(code, msg)
+                try:
+                    os.makedirs(parent, exist_ok=True)
+                except OSError as exc:
+                    code, msg = fs_error(exc)
+                    self._drop_body()
+                    return self._err(code, msg)
+
+            with UPLOAD_LOCK:
+                part, manifest_path = self._upload_paths(uid)
+                loaded = self._load_upload(uid)
+                if loaded is None:
+                    # Клиент может прислать свой uploadId первым куском —
+                    # это тоже корректное начало загрузки.
+                    if offset != 0:
+                        self._drop_body()
+                        return self._err(409, "offset mismatch")
+                    if uid is None:
+                        uid = secrets.token_hex(16)
+                    part, manifest_path = self._upload_paths(uid)
+                    if os.path.exists(part):
+                        try:
+                            os.remove(part)     # старый .part без манифеста
+                        except OSError:
+                            pass
+                    manifest = {
+                        "name": rel,
+                        "path": dest_client,
+                        "total": total,
+                        "offset": 0,
+                        "client": final_client,
+                    }
+                else:
+                    manifest, part, manifest_path = loaded
+                    try:
+                        old_total = int(manifest.get("total"))
+                        old_offset = int(manifest.get("offset", 0))
+                    except (TypeError, ValueError):
+                        self._drop_body()
+                        return self._err(404, "no such upload")
+                    if old_total != total:
+                        self._drop_body()
+                        return self._err(400, "bad total")
+                    if manifest.get("name") != rel or \
+                            manifest.get("path") != dest_client or \
+                            manifest.get("client") != final_client:
+                        self._drop_body()
+                        return self._err(409, "upload destination mismatch")
+                    if old_offset != offset:
+                        self._drop_body()
+                        return self._err(409, "offset mismatch")
+
+                upload_dir()
+                fh = None
+                try:
+                    fh = open(part, "r+b" if os.path.exists(part) else "wb")
+                    fh.seek(offset)
+                    fh.truncate(offset)         # повтор куска не оставляет хвост
+                    left = length
+                    self._body_consumed = 0
+                    while left > 0:
+                        chunk = self.rfile.read(min(CHUNK, left))
+                        if not chunk:
+                            self.close_connection = True
+                            raise _HTTPError(400, "truncated upload body")
+                        fh.write(chunk)
+                        self._body_consumed += len(chunk)
+                        left -= len(chunk)
+                    fh.flush()
+                    fh.close()
+                    fh = None
+                except _HTTPError:
+                    if fh is not None:
+                        fh.close()
+                    raise
+                except OSError as exc:
+                    if fh is not None:
+                        fh.close()
+                    code, msg = fs_error(exc)
+                    self._drop_body()
+                    return self._err(code, msg)
+
+                new_offset = offset + length
+                manifest["offset"] = new_offset
+                try:
+                    write_json_atomic(manifest_path, manifest)
+                except OSError as exc:
+                    code, msg = fs_error(exc)
+                    return self._err(code, msg)
+
+                if new_offset < total:
+                    return self._json(200, {
+                        "ok": True, "complete": False, "uploadId": uid,
+                        "offset": new_offset, "total": total,
+                    })
+
+                snap = None
+                if os.path.lexists(final):
+                    try:
+                        snap = snapshot_path(final_client, final)
+                    except OSError:
+                        try:
+                            os.remove(manifest_path)
+                        except OSError:
+                            pass
+                        return self._err(500, "cannot snapshot for undo")
+                try:
+                    try:
+                        os.replace(part, final)
+                    except OSError as exc:
+                        if exc.errno != errno.EXDEV:
+                            raise
+                        shutil.copy2(part, final)   # другой диск: копируем
+                        os.remove(part)
+                except OSError as exc:
+                    code, msg = fs_error(exc)
+                    if snap is not None:
+                        undo_cleanup({"restore": [snap]})
+                    try:
+                        os.remove(manifest_path)
+                    except OSError:
+                        pass
+                    return self._err(code, msg)
+                try:
+                    os.remove(manifest_path)
+                except OSError:
+                    pass
+                undo_push("Upload %s" % os.path.basename(final_client),
+                          remove=[final_client],
+                          restore=[snap] if snap is not None else [])
+                return self._json(200, {"ok": True, "complete": True,
+                                        "path": final_client, "size": total})
+
+        def _api_upload_cancel(self):
+            if not self._require_write():
+                return
+            uid = self._q("uploadId")
+            paths = self._upload_paths(uid)
+            if paths is None:
+                return self._err(400, "bad uploadId")
+            part, manifest_path = paths
+            with UPLOAD_LOCK:
+                for path in (part, manifest_path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+            return self._json(200, {"ok": True})
+
     return FMHandler
 
 
@@ -1789,7 +3438,28 @@ class FTPHandler(socketserver.StreamRequestHandler):
                  "OPTS", "STAT"}
 
     def setup(self):
+        global FTP_CLIENTS
         super(FTPHandler, self).setup()
+        self._counted = False
+        self._rejected = False
+        limit = int(getattr(self.server, "fm_max_clients", 0) or 0)
+        with FTP_CLIENTS_LOCK:
+            if limit > 0 and FTP_CLIENTS >= limit:
+                allowed = False
+            else:
+                FTP_CLIENTS += 1
+                self._counted = True
+                allowed = True
+        if not allowed:
+            self._rejected = True
+            self._closing = True
+            self.last_code = 421
+            try:
+                self.wfile.write(b"421 Too many connected clients.\r\n")
+                self.wfile.flush()
+            except OSError:
+                pass
+            return
         self.connection.settimeout(self.timeout)
         self.root = self.server.fm_root          # корень виртуального ФТП
         self.password = self.server.fm_password
@@ -1806,11 +3476,16 @@ class FTPHandler(socketserver.StreamRequestHandler):
         self.started = time.time()
 
     def finish(self):
+        global FTP_CLIENTS
         try:
             super(FTPHandler, self).finish()
         except OSError:
             pass
         self._close_listener()
+        if getattr(self, "_counted", False):
+            with FTP_CLIENTS_LOCK:
+                FTP_CLIENTS -= 1
+            self._counted = False
 
     # --- протокольные мелочи ---------------------------------------------- #
     def reply(self, code, text=""):
@@ -1839,6 +3514,18 @@ class FTPHandler(socketserver.StreamRequestHandler):
                          % (PID, ip, line, code if code is not None else "-"))
         sys.stdout.flush()
 
+    def _audit_ftp(self, line, cmd, arg):
+        """FTP-команда в общий журнал; PASS — только успех/неудача."""
+        del arg                          # аргумент PASS в журнал не идёт
+        if cmd == "PASS":
+            detail = "success" if self.last_code == 230 else "fail"
+        else:
+            detail = line
+            if len(detail) > MAX_AUDIT_DETAIL:
+                detail = detail[:MAX_AUDIT_DETAIL] + "..."
+        audit(self.client_address[0], "FTP " + cmd, self.vcwd,
+              self.last_code, detail)
+
     @staticmethod
     def _split_command(line):
         """Первые 4 символа — команда, всё после пробела — аргумент
@@ -1855,6 +3542,8 @@ class FTPHandler(socketserver.StreamRequestHandler):
         return head.upper(), arg
 
     def handle(self):
+        if getattr(self, "_rejected", False):
+            return                   # 421 уже отправлено в setup()
         self.reply(220, "Nerevar FM FTP server ready.")
         while not self._closing:
             try:
@@ -1876,6 +3565,7 @@ class FTPHandler(socketserver.StreamRequestHandler):
                 log_ftp("ошибка команды %s: %s" % (cmd, exc))
                 self.reply(500, "Command failed.")
             self._log(line, self.last_code)
+            self._audit_ftp(line, cmd, arg)
             if cmd == "QUIT":
                 break
 
@@ -1918,7 +3608,7 @@ class FTPHandler(socketserver.StreamRequestHandler):
         server = os.path.abspath(os.path.join(self.root, vpath[1:]))
         if server != self.root and not server.startswith(self.root + os.sep):
             return None
-        if undo_hidden(server):
+        if internal_hidden(server):
             return None
         return server
 
@@ -1960,18 +3650,40 @@ class FTPHandler(socketserver.StreamRequestHandler):
                 pass
             self.pasv = None
 
-    def _new_listener(self):
-        """Слушающий сокет на IP контрольного соединения и случайном порту."""
-        host = self._data_host()
+    def _bind_listener(self, host, port):
+        """Один слушающий сокет; None — порт занят/недоступен."""
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            listener.bind((host, 0))
+            listener.bind((host, port))
             listener.listen(1)
         except OSError:
             listener.close()
             return None
         listener.settimeout(60)            # ждём подключения клиента
+        return listener
+
+    def _new_listener(self):
+        """Слушатель на IP контрольного соединения.
+
+        Сначала перебираем настроенный диапазон ftp_pasv_min..ftp_pasv_max
+        (включительно); при 0/невалидном/занятом диапазоне — случайный порт."""
+        host = self._data_host()
+        listener = None
+        try:
+            pmin = int(getattr(self.server, "fm_pasv_min", 0) or 0)
+            pmax = int(getattr(self.server, "fm_pasv_max", 0) or 0)
+        except (TypeError, ValueError):
+            pmin = pmax = 0
+        if 0 < pmin <= pmax <= 65535:
+            for port in range(pmin, pmax + 1):
+                listener = self._bind_listener(host, port)
+                if listener is not None:
+                    break
+        if listener is None:
+            listener = self._bind_listener(host, 0)
+        if listener is None:
+            return None
         self._close_listener()
         self.pasv = listener
         self.active = None
@@ -2046,6 +3758,8 @@ class FTPHandler(socketserver.StreamRequestHandler):
             " SIZE",
             " MDTM",
             " MLST type*;size*;modify*;UNIX.mode*;",
+            " MLSD",
+            " LOGOUT",
             " TVFS",
             "211 End",
         ])
@@ -2069,6 +3783,7 @@ class FTPHandler(socketserver.StreamRequestHandler):
             " USER PASS QUIT NOOP SYST FEAT OPTS PWD CWD CDUP TYPE",
             " PASV EPSV PORT EPRT LIST NLST MLSD RETR STOR APPE DELE",
             " MKD XMKD RMD XRMD RNFR RNTO SIZE MDTM REST STAT",
+            " MLST MLSD LOGOUT",
             "214 End",
         ])
 
@@ -2304,6 +4019,43 @@ class FTPHandler(socketserver.StreamRequestHandler):
     def cmd_MLSD(self, arg):
         self._list_cmd(arg, "mlsd")
 
+    def cmd_MLST(self, arg):
+        """Один объект в формате MLSD: 250-... / 250 End."""
+        res = self._resolve(arg)
+        if res is None:
+            return
+        vpath, spath = res
+        try:
+            st = os.stat(spath)
+        except OSError:
+            self.reply(550, "Failed to stat file.")
+            return
+        name = os.path.basename(vpath.rstrip("/")) or "/"
+        kind = "dir" if stat.S_ISDIR(st.st_mode) else "file"
+        self.reply_lines([
+            "250- MLST facts for %s:" % name,
+            " " + self._row_mlsd(name, st, kind),
+            "250 End",
+        ])
+
+    def cmd_LOGOUT(self, arg):
+        """Сбросить авторизацию, но оставить контрольное соединение."""
+        self.logged_in = False
+        self.user = None
+        self.fails = 0
+        self.vcwd = "/"
+        self.rest = 0
+        self.rnfr = None
+        self._close_listener()
+        self.active = None
+        self.reply(230, "Logged out, please login again.")
+
+    def _writable(self):
+        if getattr(self.server, "fm_read_only", False):
+            self.reply(550, "Read-only mode.")
+            return False
+        return True
+
     # --- передача файлов -------------------------------------------------------- #
     def cmd_RETR(self, arg):
         res = self._resolve(arg, allow_empty=False)
@@ -2348,6 +4100,8 @@ class FTPHandler(socketserver.StreamRequestHandler):
             self.reply(226, "Transfer complete.")
 
     def _store(self, arg, append):
+        if not self._writable():
+            return
         res = self._resolve(arg, allow_empty=False)
         if res is None:
             return
@@ -2407,6 +4161,8 @@ class FTPHandler(socketserver.StreamRequestHandler):
 
     # --- файловые операции ------------------------------------------------------ #
     def cmd_DELE(self, arg):
+        if not self._writable():
+            return
         res = self._resolve(arg, allow_empty=False)
         if res is None:
             return
@@ -2422,6 +4178,8 @@ class FTPHandler(socketserver.StreamRequestHandler):
         self.reply(250, "DELE command successful.")
 
     def cmd_MKD(self, arg):
+        if not self._writable():
+            return
         res = self._resolve(arg, allow_empty=False)
         if res is None:
             return
@@ -2437,6 +4195,8 @@ class FTPHandler(socketserver.StreamRequestHandler):
         self.cmd_MKD(arg)
 
     def cmd_RMD(self, arg):
+        if not self._writable():
+            return
         res = self._resolve(arg, allow_empty=False)
         if res is None:
             return
@@ -2466,6 +4226,8 @@ class FTPHandler(socketserver.StreamRequestHandler):
         self.reply(350, "Ready for destination path.")
 
     def cmd_RNTO(self, arg):
+        if not self._writable():
+            return
         if not self.rnfr:
             self.reply(503, "RNFR required first.")
             return
@@ -2529,10 +4291,15 @@ class FMFTPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True      # перезапуск без ожидания TIME_WAIT
     daemon_threads = True           # не мешать завершению процесса
 
-    def __init__(self, addr, root, password, user):
+    def __init__(self, addr, root, password, user, pasv_min=0, pasv_max=0,
+                 max_clients=0, read_only=False):
         self.fm_root = root
         self.fm_password = password
         self.fm_user = user
+        self.fm_pasv_min = pasv_min
+        self.fm_pasv_max = pasv_max
+        self.fm_max_clients = max_clients
+        self.fm_read_only = read_only
         socketserver.ThreadingTCPServer.__init__(self, addr, FTPHandler)
 
     def handle_error(self, request, client_address):
@@ -2574,6 +4341,21 @@ def parse_args():
     parser.add_argument("--ftp-user", default=None,
                         help="логин FTP (config.json: ftp_user; "
                              "по умолчанию nerevar)")
+    parser.add_argument("--ftp-pasv-min", type=int, default=None,
+                        help="первый порт пассивного FTP-диапазона "
+                             "(config.json: ftp_pasv_min; 0 — случайный)")
+    parser.add_argument("--ftp-pasv-max", type=int, default=None,
+                        help="последний порт пассивного FTP-диапазона "
+                             "(config.json: ftp_pasv_max; 0 — случайный)")
+    parser.add_argument("--ftp-max-clients", type=int, default=None,
+                        help="максимум FTP-подключений "
+                             "(config.json: ftp_max_clients; 0 — без лимита)")
+    parser.add_argument("--read-only", action="store_true", default=None,
+                        help="только чтение: все изменения через API/FTP "
+                             "запрещены (config.json: read_only)")
+    parser.add_argument("--session-ttl", type=int, default=None,
+                        help="время жизни токена без активности, секунд "
+                             "(config.json: session_ttl; по умолчанию 604800)")
     parser.add_argument("--no-ftp", action="store_true",
                         help="не поднимать FTP-сервер")
     parser.add_argument("--config", default=CONFIG_JSON_PATH, metavar="PATH",
@@ -2611,6 +4393,23 @@ def main():
                         CONFIG_DEFAULTS["ftp_user"]))
     ftp_enabled = (not args.no_ftp) and \
         bool(cfg_file.get("ftp_enabled", CONFIG_DEFAULTS["ftp_enabled"]))
+    ftp_pasv_min = int(pick(args.ftp_pasv_min, "ftp_pasv_min",
+                            CONFIG_DEFAULTS["ftp_pasv_min"]))
+    ftp_pasv_max = int(pick(args.ftp_pasv_max, "ftp_pasv_max",
+                            CONFIG_DEFAULTS["ftp_pasv_max"]))
+    ftp_max_clients = int(pick(args.ftp_max_clients, "ftp_max_clients",
+                               CONFIG_DEFAULTS["ftp_max_clients"]))
+    read_only = bool(pick(args.read_only, "read_only",
+                          CONFIG_DEFAULTS["read_only"]))
+    session_ttl = int(pick(args.session_ttl, "session_ttl",
+                           CONFIG_DEFAULTS["session_ttl"]))
+    if session_ttl < 1:
+        session_ttl = int(CONFIG_DEFAULTS["session_ttl"])
+    # Пароль для роли view задаётся ТОЛЬКО в config.json (секрет, не флаг).
+    view_password = str(cfg_file.get("view_password")
+                        or CONFIG_DEFAULTS["view_password"])
+    audit_max = int(pick(None, "audit_max", CONFIG_DEFAULTS["audit_max"]))
+    configure_audit(audit_max)
     root = os.path.abspath(str(pick(args.root, "root", "/")))
 
     password = args.password if args.password is not None \
@@ -2630,6 +4429,13 @@ def main():
         "ftp_enabled": ftp_enabled,
         "ftp_port": ftp_port,
         "ftp_user": ftp_user,
+        "ftp_pasv_min": ftp_pasv_min,
+        "ftp_pasv_max": ftp_pasv_max,
+        "ftp_max_clients": ftp_max_clients,
+        "read_only": read_only,
+        "view_password": view_password,
+        "session_ttl": session_ttl,
+        "audit_max": audit_max,
         "places": place_defaults(cfg_file.get("places")),
     }
 
@@ -2655,7 +4461,8 @@ def main():
     if ftp_enabled:
         try:
             ftp_server = FMFTPServer((ftp_host, ftp_port), root, password,
-                                     ftp_user)
+                                     ftp_user, ftp_pasv_min, ftp_pasv_max,
+                                     ftp_max_clients, read_only)
         except OSError as exc:
             log("FTP не поднят на %s:%d: %s — продолжаем без FTP"
                 % (ftp_host, ftp_port, exc))
